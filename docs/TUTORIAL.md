@@ -50,10 +50,9 @@ tutorial/
 │       └── violations
 │           ├── collision_at_fault
 │           ├── collision_rear
-│           ├── dist_to_gt_trajectory
-│           │   └── clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4 -> ../../all/clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4
-│           └── offroad
-├── alpasim-runtime.prom
+│           ├── dist_to_gt_trajectory
+│           │   └── clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4 -> ../../all/clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4
+│           └── offroad
 ├── asl
 │   └── clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3
 │       └── 814f3c22-bb78-11f0-a5f3-2f64b47b8685
@@ -88,6 +87,17 @@ calculate metrics. The logs are organized into
 `asl/{scenario.scene_id}/{rollout_id}.*` - in this case we have 1 scenes with one
 batch of a single rollout.
   * `.asl` files which record the messages exchanged within the simulation. These are useful for debugging the simulator behavior and replaying events.
+* `eval/` contains per-rollout evaluation results:
+  * `metrics_unprocessed.parquet` - Raw driving quality metrics for each rollout
+  * `videos/` - Video recordings of each rollout
+* `aggregate/` contains aggregated results across all rollouts:
+  * `metrics_results.txt` - Formatted table of driving scores (mean, std, quantiles)
+  * `metrics_results.png` - Visual summary of driving quality metrics
+  * `metrics_unprocessed.parquet` - Combined metrics from all rollouts
+  * `videos/` - Videos organized by violation type (collision_at_fault, offroad, etc.)
+* `metrics/` contains performance profiling data (see [OPERATIONS.md](OPERATIONS.md#how-do-i-view-performance-metrics) for details):
+  * `metrics.prom` - Prometheus metrics from simulation
+  * `metrics_plot.png` - Performance visualization (CPU/GPU/RPC metrics)
 * `driver` is a directory with logs written by the driver service, useful to debug policy-internal problems.
 * `wizard-config.yaml` contains the config the wizard used for this run **after applying the inheritance of hydra**. This is useful for debugging configuration issues.
 * `generated-user-config-{ARRAY_ID}.yaml` contains an expanded version of the simulation config provided by the user, possibly split into chunks when simulating on multiple nodes.
@@ -95,7 +105,7 @@ batch of a single rollout.
 * `generated-network-config.yaml` describes which services listen on which ports during simulation.
 Not useful unless debugging the simulator itself.
 
-If everything went correctly `asl` and `eval` are usually the only results of interest.
+If everything went correctly `asl` and `eval` are usually the only results of interest. For understanding driving quality metrics and performance tuning, see the [Operations Guide](OPERATIONS.md).
 
 
 ## Basic debugging

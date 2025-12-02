@@ -42,6 +42,7 @@ To learn more about the design principles and architecture, check out the [syste
 
 - **[Onboarding Guide](docs/ONBOARDING.md)**: Initial setup and access instructions
 - **[Tutorial](docs/TUTORIAL.md)**: Step-by-step usage guide
+- **[Operations Guide](docs/OPERATIONS.md)**: Performance tuning, configuration, and troubleshooting
 - **[Design Documentation](docs/DESIGN.md)**: Technical architecture and design decisions
 - **[API Reference](src/grpc/)**: gRPC API documentation
 

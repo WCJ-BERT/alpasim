@@ -1,7 +1,5 @@
 # Contributing to the AlpaSim Docker repository
 
-[TOC]
-
 This page outlines the guidelines for anybody who wishes to contribute to the
 AlpaSim repository.
 

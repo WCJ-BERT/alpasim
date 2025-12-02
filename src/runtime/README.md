@@ -15,7 +15,7 @@ scenarios:
 
     time_start_offset_us: 297_000 # a multiple of `control_timestep_us`
 
-    zero_decision_delay: true # adds an assertion to error out if something is misconfigured
+    assert_zero_decision_delay: true # adds an assertion to error out if something is misconfigured
 
     cameras:
     -

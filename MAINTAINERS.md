@@ -2,8 +2,6 @@
 
 This document provides an introduction to project management and an overview of processes for the Alpasim project.
 
-[TOC]
-
 ## Overview
 
 ### Assumptions
