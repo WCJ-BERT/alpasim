@@ -47,7 +47,7 @@ from alpasim_runtime.services.sensorsim_service import ImageFormat, SensorsimSer
 from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.telemetry.telemetry_context import tag_telemetry, try_get_context
 from alpasim_runtime.types import Clock, RuntimeCamera
-from alpasim_utils.artifact import Artifact
+from alpasim_utils.trajdata_data_source import TrajdataDataSource
 from alpasim_utils.geometry import (
     Pose,
     Trajectory,
@@ -58,6 +58,7 @@ from alpasim_utils.geometry import (
 from alpasim_utils.logs import LogWriter
 from alpasim_utils.scenario import AABB, TrafficObjects
 from trajdata.maps import VectorMap
+from typing import Callable
 
 from eval.runtime_evaluator import RuntimeEvaluator
 from eval.scenario_evaluator import ScenarioEvalResult
@@ -149,17 +150,28 @@ class UnboundRollout:
         scenario: ScenarioConfig,
         version_ids: RolloutMetadata.VersionIds,
         random_seed: int,
-        available_artifacts: dict[str, Artifact],
         rollouts_dir: str,
+        get_scene: Optional[Callable[[str], TrajdataDataSource]] = None,
     ) -> UnboundRollout:
+        """
+        Create an UnboundRollout from configuration.
 
-        # TODO: for now we assume there's a single sequence per NRE scene
-        artifact = available_artifacts[scenario.scene_id]
+        Args:
+            config: User simulator configuration
+            scenario: Scenario configuration for this rollout
+            version_ids: Version IDs for logging
+            random_seed: Random seed for reproducibility
+            asl_dir: Directory for ASL output files
+            get_scene: Callable to get scene data source by ID
+        """
+        # Get the scene data source
+        if get_scene is not None:
+            data_source = get_scene(scenario.scene_id)
 
         camera_configs = list(scenario.cameras)
 
         control_timestamps_us_arr: np.ndarray = (
-            artifact.rig.trajectory.time_range_us.start
+            data_source.rig.trajectory.time_range_us.start
             + scenario.time_start_offset_us
             + np.arange(
                 scenario.n_sim_steps + 2
@@ -168,10 +180,10 @@ class UnboundRollout:
         )
 
         control_timestamps_us = [
-            int(min(t, artifact.rig.trajectory.time_range_us.stop - 1))
+            int(min(t, data_source.rig.trajectory.time_range_us.stop - 1))
             for t in control_timestamps_us_arr
             if t
-            < artifact.rig.trajectory.time_range_us.stop
+            < data_source.rig.trajectory.time_range_us.stop
             + ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US
         ]
 
@@ -183,10 +195,10 @@ class UnboundRollout:
 
         start_us = control_timestamps_us[0]
         end_us = control_timestamps_us[-1]
-        gt_ego_trajectory = artifact.rig.trajectory
+        gt_ego_trajectory = data_source.rig.trajectory
 
         # Filter out objects that are not in the time window
-        all_objs_in_window = artifact.traffic_objects.clip_trajectories(
+        all_objs_in_window = data_source.traffic_objects.clip_trajectories(
             start_us, end_us + 1, exclude_empty=True
         )
 
@@ -225,8 +237,8 @@ class UnboundRollout:
 
         if scenario.vehicle is not None:
             vehicle = scenario.vehicle
-        elif artifact.rig.vehicle_config is not None:
-            vehicle = artifact.rig.vehicle_config
+        elif data_source.rig.vehicle_config is not None:
+            vehicle = data_source.rig.vehicle_config
         else:
             raise ValueError("No vehicle config provided/found.")
 
@@ -242,7 +254,7 @@ class UnboundRollout:
             gt_ego_trajectory=gt_ego_trajectory,
             traffic_objs=traffic_objects,
             n_sim_steps=scenario.n_sim_steps,
-            start_timestamp_us=artifact.rig.trajectory.time_range_us.start,
+            start_timestamp_us=data_source.rig.trajectory.time_range_us.start,
             force_gt_duration_us=scenario.force_gt_duration_us,
             control_timestep_us=scenario.control_timestep_us,
             follow_log=None,
@@ -264,15 +276,15 @@ class UnboundRollout:
                 vehicle
             ),
             ego_aabb=ego_aabb,
-            nre_runid=str(artifact.metadata.logger.run_id),
-            nre_version=artifact.metadata.version_string,
-            nre_uuid=str(artifact.metadata.uuid),
+            nre_runid=str(data_source.metadata.logger.run_id),
+            nre_version=data_source.metadata.version_string,
+            nre_uuid=str(data_source.metadata.uuid),
             planner_delay_us=scenario.planner_delay_us,
             egomotion_noise=scenario.egomotion_noise,
             route_generator_type=scenario.route_generator_type,
             send_recording_ground_truth=scenario.send_recording_ground_truth,
             vehicle_config=vehicle,
-            vector_map=artifact.map,
+            vector_map=data_source.map,
             hidden_traffic_objs=hidden_traffic_objs,
             group_render_requests=scenario.group_render_requests,
         )

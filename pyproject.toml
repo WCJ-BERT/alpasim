@@ -18,6 +18,7 @@ members = [
   "src/physics",
   "src/tools",
   "src/driver",
+  "src/render",
 ]
 
 # This is a hacky workaround to skip installing certain packages.

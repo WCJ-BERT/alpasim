@@ -14,14 +14,14 @@ import functools
 import logging
 import traceback
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Callable, Optional
 
 import alpasim_runtime
 from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.camera_catalog import CameraCatalog
-from alpasim_runtime.config import ScenarioConfig, UserSimulatorConfig
+from alpasim_runtime.config import DataSourceConfig, ScenarioConfig, UserSimulatorConfig
 from alpasim_runtime.loop import UnboundRollout
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
@@ -30,11 +30,29 @@ from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.services.service_pool import ServicePool
 from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.worker.ipc import JobResult, RolloutJob, ServiceAllocations
-from alpasim_utils.artifact import Artifact
+from alpasim_utils.scene_data_source import SceneDataSource
 
 from eval.schema import EvalConfig
 
 logger = logging.getLogger(__name__)
+
+try:
+    from trajdata.dataset import UnifiedDataset
+    from alpasim_utils.trajdata_data_source import TrajdataDataSource
+
+    TRAJDATA_AVAILABLE = True
+
+except ImportError:
+    TRAJDATA_AVAILABLE = False
+    UnifiedDataset = None
+
+# Optional USDZ artifact support (for independent services like mtgs_sensorsim)
+try:
+    from alpasim_utils.artifact import Artifact
+    USDZ_AVAILABLE = True
+except ImportError:
+    USDZ_AVAILABLE = False
+    Artifact = None
 
 
 @dataclass
@@ -42,6 +60,8 @@ class Dispatcher:
     """
     Keeps track of contention of each microservice and assigns tasks as they come available.
     Preserves named pool attributes for type safety.
+
+    The Dispatcher uses config-based data loading via DataSourceConfig from UserSimulatorConfig.
     """
 
     driver_pool: ServicePool[DriverService]
@@ -53,10 +73,143 @@ class Dispatcher:
     camera_catalog: CameraCatalog
 
     user_config: UserSimulatorConfig
-    artifacts: dict[str, Artifact]
     version_ids: RolloutMetadata.VersionIds
     rollouts_dir: str
     eval_config: EvalConfig  # Eval config for in-runtime evaluation
+
+    # Scene data management - on-demand loading via get_scene()
+    _scene_cache: dict[str, SceneDataSource] = field(default_factory=dict)
+    _data_source_config: Optional[DataSourceConfig] = None
+    _dataset: Optional[Any] = None  # UnifiedDataset when available
+    _scene_id_to_idx: dict[str, int] = field(default_factory=dict)  # Map scene_id to dataset index
+    _smooth_trajectories: bool = True
+
+    def get_scene(self, scene_id: str) -> SceneDataSource:
+        """
+        Get a scene data source by ID, loading on-demand if necessary.
+
+        This method provides lazy loading of scene data, reducing memory usage
+        and startup time compared to pre-loading all scenes.
+
+        Args:
+            scene_id: Unique identifier for the scene
+
+        Returns:
+            SceneDataSource implementation (TrajdataDataSource)
+
+        Raises:
+            KeyError: If scene_id is not found in available scenes
+        """
+        # Check cache first
+        if scene_id in self._scene_cache:
+            return self._scene_cache[scene_id]
+
+        # On-demand loading from UnifiedDataset
+        if self._dataset is not None and TRAJDATA_AVAILABLE:
+            try:
+                # Look up scene index by scene_id
+                scene_idx = self._scene_id_to_idx.get(scene_id)
+                if scene_idx is None:
+                    raise KeyError(f"Scene {scene_id} not found in dataset")
+
+                # Get scene from dataset using index
+                scene = self._dataset.get_scene(scene_idx)
+                if scene is None:
+                    raise KeyError(f"Scene at index {scene_idx} not found in dataset")
+
+                # Get asset_base_path from config
+                asset_base_path = None
+                if self._data_source_config is not None:
+                    asset_base_path = self._data_source_config.asset_base_path
+
+                # Create TrajdataDataSource
+                data_source = TrajdataDataSource.from_trajdata_scene(
+                    scene=scene,
+                    dataset=self._dataset,
+                    smooth_trajectories=self._smooth_trajectories,
+                    asset_base_path=asset_base_path,
+                )
+
+                # Cache for future use
+                self._scene_cache[scene_id] = data_source
+                logger.debug(f"Loaded scene {scene_id} on-demand")
+                return data_source
+
+            except Exception as e:
+                logger.error(f"Failed to load scene {scene_id}: {e}")
+                raise KeyError(f"Scene {scene_id} not found or failed to load: {e}")
+
+        raise KeyError(
+            f"Scene {scene_id} not found. Available scenes: "
+            f"{list(self._scene_cache.keys())}"
+        )
+
+    # Scene data management - on-demand loading via get_scene()
+    _scene_cache: dict[str, SceneDataSource] = field(default_factory=dict)
+    _data_source_config: Optional[DataSourceConfig] = None
+    _dataset: Optional[Any] = None  # UnifiedDataset when available
+    _scene_id_to_idx: dict[str, int] = field(default_factory=dict)  # Map scene_id to dataset index
+    _smooth_trajectories: bool = True
+
+    def get_scene(self, scene_id: str) -> SceneDataSource:
+        """
+        Get a scene data source by ID, loading on-demand if necessary.
+
+        This method provides lazy loading of scene data, reducing memory usage
+        and startup time compared to pre-loading all scenes.
+
+        Args:
+            scene_id: Unique identifier for the scene
+
+        Returns:
+            SceneDataSource implementation (TrajdataDataSource)
+
+        Raises:
+            KeyError: If scene_id is not found in available scenes
+        """
+        # Check cache first
+        if scene_id in self._scene_cache:
+            return self._scene_cache[scene_id]
+
+        # On-demand loading from UnifiedDataset
+        if self._dataset is not None and TRAJDATA_AVAILABLE:
+            try:
+                # Look up scene index by scene_id
+                scene_idx = self._scene_id_to_idx.get(scene_id)
+                if scene_idx is None:
+                    raise KeyError(f"Scene {scene_id} not found in dataset")
+
+                # Get scene from dataset using index
+                scene = self._dataset.get_scene(scene_idx)
+                if scene is None:
+                    raise KeyError(f"Scene at index {scene_idx} not found in dataset")
+
+                # Get asset_base_path from config
+                asset_base_path = None
+                if self._data_source_config is not None:
+                    asset_base_path = self._data_source_config.asset_base_path
+
+                # Create TrajdataDataSource
+                data_source = TrajdataDataSource.from_trajdata_scene(
+                    scene=scene,
+                    dataset=self._dataset,
+                    smooth_trajectories=self._smooth_trajectories,
+                    asset_base_path=asset_base_path,
+                )
+
+                # Cache for future use
+                self._scene_cache[scene_id] = data_source
+                logger.debug(f"Loaded scene {scene_id} on-demand")
+                return data_source
+
+            except Exception as e:
+                logger.error(f"Failed to load scene {scene_id}: {e}")
+                raise KeyError(f"Scene {scene_id} not found or failed to load: {e}")
+
+        raise KeyError(
+            f"Scene {scene_id} not found. Available scenes: "
+            f"{list(self._scene_cache.keys())}"
+        )
 
     async def find_scenario_incompatibilities(
         self, scenario: ScenarioConfig
@@ -75,17 +228,66 @@ class Dispatcher:
     async def create(
         user_config: UserSimulatorConfig,
         allocations: ServiceAllocations,
-        usdz_glob: str,
-        rollouts_dir: str,
+        rollouts_dir: str = "",
         eval_config: EvalConfig,
     ) -> Dispatcher:
-        """Initialize dispatcher: discover artifacts, build pools from allocations."""
+        """
+        Initialize dispatcher: create UnifiedDataset from config, build service pools.
+
+        Args:
+            user_config: User simulator configuration (must include data_source)
+            allocations: Service allocations
+            asl_dir: Directory for ASL output files
+        """
         camera_catalog = CameraCatalog(user_config.extra_cameras)
 
-        # NOTE: In multi-worker mode, each worker re-discovers artifacts independently.
-        artifacts = Artifact.discover_from_glob(
-            usdz_glob, smooth_trajectories=user_config.smooth_trajectories
+        # Initialize data source fields
+        scene_cache: dict[str, SceneDataSource] = {}
+        dataset = None
+        data_source_config = user_config.data_source
+        smooth_trajectories = user_config.smooth_trajectories
+
+        # Config-based data loading (required)
+        if data_source_config is None:
+            raise ValueError(
+                "data_source is required in user config. "
+                "Please set data_source in your YAML config file."
+            )
+
+        logger.info("Creating UnifiedDataset from config")
+        if not TRAJDATA_AVAILABLE:
+            raise ImportError(
+                "trajdata is required for data source loading. "
+                "Please install trajdata."
+            )
+
+        # Create UnifiedDataset from config
+        dataset = UnifiedDataset(
+            desired_data=data_source_config.desired_data,
+            data_dirs=data_source_config.data_dirs,
+            cache_location=data_source_config.cache_location,
+            incl_vector_map=data_source_config.incl_vector_map,
+            rebuild_cache=data_source_config.rebuild_cache,
+            rebuild_maps=data_source_config.rebuild_maps,
+            desired_dt=data_source_config.desired_dt,
+            num_workers=data_source_config.num_workers,
         )
+        logger.info(
+            f"Created UnifiedDataset with {dataset.num_scenes()} scenes, "
+            f"desired_data={data_source_config.desired_data}"
+        )
+
+        # Build scene_id to index mapping
+        scene_id_to_idx = {}
+        num_scenes = dataset.num_scenes()
+        for idx in range(num_scenes):
+            try:
+                scene = dataset.get_scene(idx)
+                scene_id_to_idx[scene.name] = idx
+            except Exception as e:
+                logger.warning(f"Failed to get scene at index {idx}: {e}")
+                continue
+        logger.info(f"Built scene_id mapping for {len(scene_id_to_idx)} scenes")
 
         endpoints = user_config.endpoints
         timeout = endpoints.startup_timeout_s
@@ -149,9 +351,13 @@ class Dispatcher:
             controller_pool=controller,
             camera_catalog=camera_catalog,
             user_config=user_config,
-            artifacts=artifacts,
             version_ids=version_ids,
             rollouts_dir=rollouts_dir,
+            _scene_cache=scene_cache,
+            _data_source_config=data_source_config,
+            _dataset=dataset,
+            _scene_id_to_idx=scene_id_to_idx,
+            _smooth_trajectories=smooth_trajectories,
             eval_config=eval_config,
         )
 
@@ -215,7 +421,7 @@ class Dispatcher:
                     scenario=job.scenario,
                     version_ids=self.version_ids,
                     random_seed=job.seed,
-                    available_artifacts=self.artifacts,
+                    get_scene=self.get_scene,
                     rollouts_dir=self.rollouts_dir,
                 ),
             )

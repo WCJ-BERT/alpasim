@@ -183,7 +183,6 @@ async def worker_async_main(args: WorkerArgs) -> None:
         dispatcher = await Dispatcher.create(
             user_config=user_config,
             allocations=args.allocations,
-            usdz_glob=args.usdz_glob,
             rollouts_dir=rollouts_dir,
             eval_config=args.eval_config,
         )

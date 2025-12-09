@@ -116,7 +116,6 @@ class WorkerArgs:
     result_queue: Queue  # Queue[JobResult]
     allocations: ServiceAllocations  # Pre-computed service allocations for this worker
     user_config_path: str  # Needed for user config (scenarios, endpoints, etc.)
-    usdz_glob: str
     log_dir: str  # Root directory for outputs (asl/, metrics/, txt-logs/)
     eval_config: EvalConfig
     # For orphan detection in subprocess mode. None disables detection (inline mode).
