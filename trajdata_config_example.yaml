@@ -1,5 +1,5 @@
 desired_data:
-  - nuplan_train
+  - nuplan_test
 
 cache_location: "/inspire/hdd/project/roboticsystem2/wangcaojun-240208020180/repo-wcj/trajdata/datasets"
 
@@ -12,5 +12,7 @@ desired_dt: 0.5
 verbose: true
 
 data_dirs:
-  nuplan_train: "/inspire/hdd/project/roboticsystem2/public/nuplan/dataset/nuplan-v1.1"
+  nuplan_test: "/inspire/hdd/project/roboticsystem2/public/nuplan/dataset/nuplan-v1.1"
+
+# scene_indices: [0,1,2,3]
 
