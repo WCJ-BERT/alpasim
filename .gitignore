@@ -34,3 +34,4 @@ data/vavam-driver/*
 # local dir
 my_run/
 outputs/
+logs/

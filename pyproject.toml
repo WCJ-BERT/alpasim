@@ -16,4 +16,5 @@ members = [
   "src/physics",
   "src/tools",
   "src/driver",
+  "src/render",
 ]
