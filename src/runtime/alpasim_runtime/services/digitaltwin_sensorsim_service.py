@@ -43,15 +43,14 @@ from alpasim_utils.scene_data_source import SceneDataSource
 
 logger = logging.getLogger(__name__)
 
-# Import worldengine components
+# Import DigitalTwin renderer from local render module
 try:
-    from worldengine.engine.engine_utils import get_global_config, set_global_config
-    from worldengine.render.digitaltwin.digitaltwin import DigitalTwin
-    from worldengine.render.base_renderer import RenderState
-    WORLDENGINE_AVAILABLE = True
+    from src.render.src.digitaltwin import DigitalTwin
+    from src.render.base_renderer import RenderState
+    DIGITALTWIN_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"worldengine not available: {e}")
-    WORLDENGINE_AVAILABLE = False
+    logger.warning(f"DigitalTwin renderer not available: {e}")
+    DIGITALTWIN_AVAILABLE = False
     DigitalTwin = None
     RenderState = None
 
@@ -90,8 +89,8 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             cache_size: Number of renderer instances to cache
             device: Device to use for rendering (cuda or cpu)
         """
-        if not WORLDENGINE_AVAILABLE:
-            raise ImportError("worldengine is required for DigitalTwinSensorsimService")
+        if not DIGITALTWIN_AVAILABLE:
+            raise ImportError("DigitalTwin renderer is required for DigitalTwinSensorsimService")
         
         self.server = server
         self.artifacts: Dict[str, Artifact] = Artifact.discover_from_glob(artifact_glob)
@@ -120,63 +119,49 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             # Get asset_id from mapping or use scene_id
             asset_id = self.scene_id_to_asset_id_mapping.get(scene_id, scene_id)
             
-            # Initialize global config if needed
-            try:
-                get_global_config()
-            except:
-                # Create a minimal config
-                from omegaconf import DictConfig
-                config = DictConfig({
-                    "asset_folder_path": str(self.asset_folder_path),
-                })
-                set_global_config(config)
+            # Create renderer with asset_folder_path from service config
+            renderer = DigitalTwin(
+                device=self.device,
+                asset_folder_path=self.asset_folder_path
+            )
             
-            # Create renderer
-            renderer = DigitalTwin(device=self.device)
-            
-            # Initialize renderer for this scene
-            # We need to manually initialize since DigitalTwin.reset requires engine context
-            # Instead, we'll directly use asset_manager to load assets
+            # Clean asset_id (remove suffix like "-001")
             asset_id_clean = asset_id
             if asset_id_clean[-4:].startswith('-'):  # Remove suffix like "-001"
                 asset_id_clean = asset_id_clean[:-4]
             
-            # Reset asset manager
-            reset_asset = renderer.asset_manager.reset(asset_id_clean)
-            if reset_asset:
-                renderer._prepare_metas()
-                renderer._init_gaussian_models()
-                renderer.set_asset(renderer.asset_manager.background_asset)
-                
-                # Create a minimal digitaltwin_agent2states
-                # Since we don't have engine context, we'll create a simplified version
-                # that allows rendering to work. The actual agent states will come from
-                # the render request.
-                renderer.digitaltwin_agent2states = {}
-                # Add ego if available from rig trajectory
-                try:
-                    rig = artifact.rig
-                    if rig.trajectory.poses is not None and len(rig.trajectory.poses) > 0:
-                        # Create a minimal ego state from first pose
-                        first_pose = rig.trajectory.poses[0]
-                        renderer.digitaltwin_agent2states['ego'] = {
-                            'translation': torch.tensor(
-                                [first_pose.vec3[0], first_pose.vec3[1], first_pose.vec3[2]],
-                                device=self.device,
-                                dtype=torch.float64
-                            ).unsqueeze(0),
-                            'rotation': torch.tensor(
-                                [first_pose.quat.w, first_pose.quat.x, first_pose.quat.y, first_pose.quat.z],
-                                device=self.device,
-                                dtype=torch.float64
-                            ).unsqueeze(0),
-                        }
-                except Exception as e:
-                    logger.warning(f"Could not create ego state from rig: {e}")
-                    # Create empty state - renderer will use original log data
-                    renderer.digitaltwin_agent2states = {}
-                
-                renderer.sensor_caches = None
+            # Reset renderer with asset_id
+            renderer.reset(current_scene_id=scene_id, asset_id=asset_id_clean)
+            
+            # Calculate ego2globals from rig trajectory if available
+            ego2globals = None
+            try:
+                rig = artifact.rig
+                if rig.trajectory.poses is not None and len(rig.trajectory.poses) > 0:
+                    # Convert rig trajectory poses to ego2global transformation matrices
+                    poses = rig.trajectory.poses
+                    ego2globals_list = []
+                    for pose in poses:
+                        # Create 4x4 transformation matrix from pose
+                        trans = np.array([pose.vec3[0], pose.vec3[1], pose.vec3[2]])
+                        quat = np.array([pose.quat.w, pose.quat.x, pose.quat.y, pose.quat.z])
+                        
+                        # Convert quaternion to rotation matrix
+                        from src.render.src.utils.gaussian_utils import quat_to_rotmat
+                        rot_mat = (torch.tensor(quat).unsqueeze(0)).squeeze(0).numpy()
+                        
+                        # Create 4x4 transformation matrix
+                        transform = np.eye(4)
+                        transform[:3, :3] = rot_mat
+                        transform[:3, 3] = trans
+                        ego2globals_list.append(transform)
+                    
+                    ego2globals = np.stack(ego2globals_list)
+            except Exception as e:
+                logger.warning(f"Could not compute ego2globals from rig trajectory: {e}")
+            
+            # Calibrate agent states (will use ego2globals if provided)
+            renderer.digitaltwin_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
             
             renderer._scene_id = scene_id
             renderer._asset_id = asset_id
