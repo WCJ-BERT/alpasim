@@ -130,7 +130,8 @@ def matrix_to_quaternion(rotation_matrix):
         rotation_matrix = rotation_matrix[None, ...]
     assert rotation_matrix.shape[1:] == (3, 3)
 
-    traces = torch.vmap(torch.trace)(rotation_matrix)
+    # Compute traces manually instead of using vmap (for compatibility)
+    traces = rotation_matrix[:, 0, 0] + rotation_matrix[:, 1, 1] + rotation_matrix[:, 2, 2]
     quaternion = torch.zeros(
         rotation_matrix.shape[0],
         4,

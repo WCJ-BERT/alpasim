@@ -278,6 +278,20 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             delta=definition.rig_to_camera,
         )
 
+        # Create ego_pose (ego vehicle pose without rig_to_camera transform)
+        # This is used by DigitalTwin renderer which needs the actual ego position
+        ego_pose = trajectory_to_pose_pair(
+            ego_trajectory,
+            delta=None,  # No rig_to_camera transform for ego pose
+        )
+
+        # Get rig_to_camera as grpc Pose for DigitalTwin renderer
+        rig_to_camera_pose = (
+            definition.rig_to_camera.as_grpc_pose()
+            if definition.rig_to_camera is not None
+            else None
+        )
+
         return RGBRenderRequest(
             scene_id=scene_id,
             resolution_h=camera.render_resolution_hw[0],
@@ -286,6 +300,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             frame_start_us=start_us,
             frame_end_us=end_us,
             sensor_pose=sensor_pose,
+            ego_pose=ego_pose,  # Add ego_pose for DigitalTwin renderer
+            rig_to_camera=rig_to_camera_pose,  # Add rig_to_camera for DigitalTwin
             dynamic_objects=dynamic_objects,
             image_format=image_format,
             image_quality=95,
@@ -337,13 +353,15 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         )
 
         images_with_metadata = []
-        for rgb_response in response.rgb_responses:
+        # Match responses with requests to get metadata (timestamps, camera_id)
+        # RGBRenderReturn only contains image_bytes, so we need to get metadata from the request
+        for rgb_request, rgb_response in zip(request.rgb_requests, response.rgb_returns):
             images_with_metadata.append(
                 ImageWithMetadata(
-                    start_timestamp_us=rgb_response.start_timestamp_us,
-                    end_timestamp_us=rgb_response.end_timestamp_us,
+                    start_timestamp_us=rgb_request.frame_start_us,
+                    end_timestamp_us=rgb_request.frame_end_us,
                     image_bytes=rgb_response.image_bytes,
-                    camera_logical_id=rgb_response.camera_logical_id,
+                    camera_logical_id=rgb_request.camera_intrinsics.logical_id,
                 )
             )
 
