@@ -14,35 +14,56 @@ endpoints:
     skip: true
   sensorsim:
     n_concurrent_rollouts: 2
-    skip: true
+    skip: false
   sensorsim_cache_size: '4'
   trafficsim:
     n_concurrent_rollouts: 14
     skip: true
-extra_cameras:
-  - logical_id: camera_front_wide_120fov
-    rig_to_camera:
-      rotation_xyzw:
-        - -0.49929397355810856
-        - 0.5039939168301356
-        - -0.4972939976976715
-        - 0.49939397235113037
-      translation_m:
-        - 1.65897811
-        - -0.01443456
-        - 1.51539499
 
 scenarios:
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=0c318d7923d15b78
-    assert_zero_decision_delay: true
+  - scene_id: 2021.08.30.16.16.44_veh-40_00779_01088-e5d2a01ab5b0562a
+    assert_zero_decision_delay: false
     cameras:
-      - first_frame_offset_us: -30000
+      - logical_id: CAM_F0
+        first_frame_offset_us: 0
         frame_interval_us: 500000
         height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
         width: 1920
-    control_timestep_us: 500000
+      - logical_id: CAM_L0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080  
+        width: 1920
+      - logical_id: CAM_L1
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_L2
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R1
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R2
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_B0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
     egomotion_noise:
       cov_orientation_x: 0.0
       cov_orientation_y: 0.0
@@ -54,6 +75,7 @@ scenarios:
       time_constant_orientation: 5.0
       time_constant_position: 3.0
     egopose_interval_us: 500000
+    control_timestep_us: 500000 
     force_gt_duration_us: 20000000
     min_traffic_duration_us: 3000000
     n_rollouts: 1
@@ -63,314 +85,4 @@ scenarios:
     route_generator_type: MAP
     send_av_messages: false
     send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=24567f5ad57455c4
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=34f30283d3bd53ec
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=431ae29947e95c26
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=45e8b10f95925c47
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=4b594a8e80915943
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=5d3e45ad38ef5b9c
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=83fd1c194c0c5441
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_00083_00485=c9b12b21fa7c57fd
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_01100_01664=025b657634505df3
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
-  - scene_id: 2021.05.25.14.16.10_veh-35_01100_01664=067d731005885300
-    assert_zero_decision_delay: true
-    cameras:
-      - first_frame_offset_us: -30000
-        frame_interval_us: 500000
-        height: 1080
-        logical_id: camera_front_wide_120fov
-        shutter_duration_us: 30000
-        width: 1920
-    control_timestep_us: 500000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 500000
-    force_gt_duration_us: 20000000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 8
-    physics_update_mode: NONE
-    planner_delay_us: 0
-    route_generator_type: MAP
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 1000000
+    time_start_offset_us: 00000

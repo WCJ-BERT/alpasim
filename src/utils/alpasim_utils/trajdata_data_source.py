@@ -266,8 +266,8 @@ class TrajdataDataSource(SceneDataSource):
 
             # Create QVec
             poses = QVec(
-                vec3=np.array(poses_vec3, dtype=np.float32),
-                quat=np.array(poses_quat, dtype=np.float32),
+                vec3=np.array(poses_vec3, dtype=np.float64),
+                quat=np.array(poses_quat, dtype=np.float64),
             )
 
             # Create Trajectory

@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import io
 import logging
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -72,7 +73,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
     def __init__(
         self,
         server: grpc.Server,
-        artifact_glob: str,
+        artifacts: Dict[str, SceneDataSource],
         asset_folder_path: str,
         scene_id_to_asset_id_mapping: Optional[Dict[str, str]] = None,
         cache_size: int = 2,
@@ -83,7 +84,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         
         Args:
             server: gRPC server instance
-            artifact_glob: Glob pattern to discover USDZ artifacts
+            artifacts: Dictionary mapping scene_id to SceneDataSource (from load_data_sources)
             asset_folder_path: Path to DigitalTwin asset folder
             scene_id_to_asset_id_mapping: Optional mapping from scene_id to asset_id
             cache_size: Number of renderer instances to cache
@@ -93,7 +94,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             raise ImportError("DigitalTwin renderer is required for DigitalTwinSensorsimService")
         
         self.server = server
-        self.artifacts: Dict[str, Artifact] = Artifact.discover_from_glob(artifact_glob)
+        self.artifacts: Dict[str, SceneDataSource] = artifacts
         self.asset_folder_path = Path(asset_folder_path)
         self.scene_id_to_asset_id_mapping = scene_id_to_asset_id_mapping or {}
         self.device = device
@@ -133,35 +134,141 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             # Reset renderer with asset_id
             renderer.reset(current_scene_id=scene_id, asset_id=asset_id_clean)
             
-            # Calculate ego2globals from rig trajectory if available
+            # Calculate ego2globals - priority: video_scene_dict > rig trajectory
             ego2globals = None
+            
+            # First, try to get from video_scene_dict.pkl (preferred source)
             try:
-                rig = artifact.rig
-                if rig.trajectory.poses is not None and len(rig.trajectory.poses) > 0:
-                    # Convert rig trajectory poses to ego2global transformation matrices
-                    poses = rig.trajectory.poses
-                    ego2globals_list = []
-                    for pose in poses:
-                        # Create 4x4 transformation matrix from pose
-                        trans = np.array([pose.vec3[0], pose.vec3[1], pose.vec3[2]])
-                        quat = np.array([pose.quat.w, pose.quat.x, pose.quat.y, pose.quat.z])
-                        
-                        # Convert quaternion to rotation matrix
-                        from src.render.src.utils.gaussian_utils import quat_to_rotmat
-                        rot_mat = (torch.tensor(quat).unsqueeze(0)).squeeze(0).numpy()
-                        
-                        # Create 4x4 transformation matrix
-                        transform = np.eye(4)
-                        transform[:3, :3] = rot_mat
-                        transform[:3, 3] = trans
-                        ego2globals_list.append(transform)
+                if hasattr(renderer.asset_manager, 'video_scene_dict') and renderer.asset_manager.video_scene_dict:
+                    video_dict_raw = renderer.asset_manager.video_scene_dict
                     
-                    ego2globals = np.stack(ego2globals_list)
+                    # Handle nested structure: video_scene_dict may be {scene_id: {frame_infos, ego2global, ...}}
+                    # or directly {frame_infos, ego2global, ...}
+                    video_dict = video_dict_raw
+                    if isinstance(video_dict_raw, dict) and 'ego2global' not in video_dict_raw and 'frame_infos' not in video_dict_raw:
+                        # Nested structure - get the first (and usually only) scene data
+                        first_key = next(iter(video_dict_raw.keys()), None)
+                        if first_key and isinstance(video_dict_raw[first_key], dict):
+                            video_dict = video_dict_raw[first_key]
+                            logger.info(f"Accessing nested video_scene_dict with key: {first_key}")
+                    
+                    # Check for frame_infos FIRST (more common case with 301 frames)
+                    if 'frame_infos' in video_dict and len(video_dict['frame_infos']) > 0:
+                        # Extract ego2global from frame_infos (each frame has its own ego2global)
+                        frame_infos = video_dict['frame_infos']
+                        logger.info(f"Found {len(frame_infos)} frames in frame_infos, extracting ego2globals...")
+                        ego2globals_list = []
+                        for fi in frame_infos:
+                            if 'ego2global' in fi:
+                                ego2globals_list.append(np.array(fi['ego2global']))
+                            elif 'ego2global_translation' in fi and 'ego2global_rotation' in fi:
+                                transform = np.eye(4)
+                                transform[:3, 3] = np.array(fi['ego2global_translation'])
+                                rot = np.array(fi['ego2global_rotation'])
+                                if rot.shape == (3, 3):
+                                    transform[:3, :3] = rot
+                                elif rot.shape == (4,):  # quaternion
+                                    from pyquaternion import Quaternion
+                                    q = Quaternion(rot[0], rot[1], rot[2], rot[3])
+                                    transform[:3, :3] = q.rotation_matrix
+                                ego2globals_list.append(transform)
+                        if ego2globals_list:
+                            ego2globals = np.stack(ego2globals_list)
+                            logger.info(f"✓ Extracted ego2globals from frame_infos: shape {ego2globals.shape}, first translation: {ego2globals[0, :3, 3]}")
+                    elif 'ego2global' in video_dict:
+                        ego2globals = np.array(video_dict['ego2global'])
+                        if ego2globals.ndim == 2:
+                            # Single matrix, add batch dimension
+                            ego2globals = ego2globals[np.newaxis, ...]
+                        logger.info(f"Loaded ego2globals from video_scene_dict: shape {ego2globals.shape}")
+                    elif 'ego2global_translation' in video_dict and 'ego2global_rotation' in video_dict:
+                        # Reconstruct from translation and rotation
+                        translations = np.array(video_dict['ego2global_translation'])
+                        rotations = np.array(video_dict['ego2global_rotation'])
+                        if translations.ndim == 1:
+                            translations = translations[np.newaxis, ...]
+                        if rotations.ndim == 2:
+                            rotations = rotations[np.newaxis, ...]
+                        
+                        ego2globals_list = []
+                        for i in range(len(translations)):
+                            transform = np.eye(4)
+                            transform[:3, :3] = rotations[i] if rotations.shape[-1] == 3 else rotations[i].reshape(3, 3)
+                            transform[:3, 3] = translations[i]
+                            ego2globals_list.append(transform)
+                        ego2globals = np.stack(ego2globals_list)
+                        logger.info(f"Reconstructed ego2globals from video_scene_dict: shape {ego2globals.shape}")
             except Exception as e:
-                logger.warning(f"Could not compute ego2globals from rig trajectory: {e}")
+                logger.warning(f"Could not load ego2globals from video_scene_dict: {e}")
+            
+            # Fallback: compute from rig trajectory if video_scene_dict not available
+            if ego2globals is None:
+                try:
+                    rig = artifact.rig
+                    if rig.trajectory.poses is not None and len(rig.trajectory.poses) > 0:
+                        # Convert rig trajectory poses to ego2global transformation matrices
+                        poses = rig.trajectory.poses
+                        ego2globals_list = []
+                        for pose in poses:
+                            # Create 4x4 transformation matrix from pose
+                            # Handle different pose formats (gRPC objects vs numpy arrays)
+                            if hasattr(pose.vec3, '__getitem__'):  # numpy array or similar
+                                trans = np.array([pose.vec3[0], pose.vec3[1], pose.vec3[2]])
+                            else:  # gRPC object with .x, .y, .z attributes
+                                trans = np.array([pose.vec3.x, pose.vec3.y, pose.vec3.z])
+
+                            if hasattr(pose.quat, 'w'):  # gRPC object with .w, .x, .y, .z attributes
+                                quat = np.array([pose.quat.w, pose.quat.x, pose.quat.y, pose.quat.z])
+                            elif hasattr(pose.quat, '__getitem__'):  # numpy array or similar
+                                quat = np.array(pose.quat)
+                            else:
+                                raise ValueError(f"Unsupported quaternion format: {type(pose.quat)}")
+                            
+                            # Convert quaternion to rotation matrix using proper function
+                            from src.render.src.utils.gaussian_utils import quat_to_rotmat
+                            quat_tensor = torch.tensor(quat, dtype=torch.float64).unsqueeze(0)  # [1, 4]
+                            rot_mat = quat_to_rotmat(quat_tensor).squeeze(0).numpy()  # [3, 3]
+                            
+                            # Create 4x4 transformation matrix
+                            transform = np.eye(4)
+                            transform[:3, :3] = rot_mat
+                            transform[:3, 3] = trans
+                            ego2globals_list.append(transform)
+                        
+                        ego2globals = np.stack(ego2globals_list)
+                        logger.info(f"Computed ego2globals from rig trajectory: shape {ego2globals.shape}")
+                except Exception as e:
+                    logger.warning(f"Could not compute ego2globals from rig trajectory: {e}")
+            
+            # Set world_to_nre transformation from Rig
+            # This enables Simulator Local → Nuplan Global coordinate conversion in render()
+            if hasattr(artifact, 'rig') and artifact.rig is not None:
+                if hasattr(artifact.rig, 'world_to_nre') and artifact.rig.world_to_nre is not None:
+                    renderer.set_world_to_nre(artifact.rig.world_to_nre)
+                    logger.info(f"Set world_to_nre from rig: {artifact.rig.world_to_nre[:3, 3]}")
+                else:
+                    logger.warning("artifact.rig exists but world_to_nre is None")
+            else:
+                logger.warning("artifact.rig not available, world_to_nre not set")
             
             # Calibrate agent states (will use ego2globals if provided)
             renderer.digitaltwin_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
+            
+            # NOTE: No coordinate offset conversion needed!
+            # - Runtime sends ego_pose already in global coordinates
+            # - DigitalTwin.render() will subtract recon2global_translation internally
+            # - get_agent_pose() does nearest-neighbor search in reconstruction coordinate system
+            # 
+            # Coordinate flow:
+            # 1. Runtime: ego_pose in global frame [x_global, y_global, ...]
+            # 2. Service: passes through unchanged
+            # 3. DigitalTwin.render(): subtracts recon2global_translation → reconstruction frame
+            # 4. get_agent_pose(): matches in reconstruction frame against digitaltwin_agent2states
+            # 5. digitaltwin_agent2states contains: video_scene_dict.ego2global (global) - recon2global
+            #
+            # Therefore: NO offset conversion is needed in the service layer
+            renderer.local_to_global_offset = None  # Not used
+            logger.info("Coordinate system: Runtime sends global, DigitalTwin handles conversion internally")
             
             renderer._scene_id = scene_id
             renderer._asset_id = asset_id
@@ -195,13 +302,13 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
     ) -> AvailableCamerasReturn:
         """Return available cameras for a scene."""
         scene_id = request.scene_id
+        renderer = self.get_renderer(scene_id)
         if scene_id not in self.artifacts:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"Scene {scene_id} not found")
             return AvailableCamerasReturn()
         
-        artifact = self.artifacts[scene_id]
-        cameras = get_available_cameras_from_data_source(artifact)
+        cameras = get_available_cameras_from_data_source(asset_manager=renderer.asset_manager)
         
         return AvailableCamerasReturn(available_cameras=cameras)
 
@@ -241,6 +348,8 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         """Render an RGB image using DigitalTwin."""
         try:
             scene_id = request.scene_id
+            camera_name = request.camera_intrinsics.logical_id
+            frame_start_us = request.frame_start_us
             
             if scene_id not in self.artifacts:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -253,7 +362,14 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             renderer = self.get_renderer(scene_id)
             
             # Convert RGBRenderRequest to RenderState
-            render_state_dict = rgb_render_request_to_render_state(request, artifact)
+            # Pass asset_manager to allow access to video_scene_dict for ego2global info
+            render_state_dict = rgb_render_request_to_render_state(
+                request, 
+                asset_manager=renderer.asset_manager
+            )
+            
+            # NOTE: No coordinate conversion needed - Runtime sends global coordinates
+            # DigitalTwin.render() will handle the conversion internally by subtracting recon2global_translation
             
             # Create RenderState object
             # Note: RenderState is a dict subclass, so we can use dict assignment
@@ -266,8 +382,8 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             # Set recon2global_translation if not set (needed for coordinate transformation)
             if not hasattr(renderer, 'recon2global_translation'):
                 # Try to get from asset manager
-                if hasattr(renderer.asset_manager, 'background_asset') and renderer.asset_manager.background_asset:
-                    bg_asset = renderer.asset_manager.background_asset
+                if hasattr(renderer.asset_manager, 'background_asset_dict') and renderer.asset_manager.background_asset_dict:
+                    bg_asset = renderer.asset_manager.background_asset_dict
                     if 'background' in bg_asset and 'config' in bg_asset['background']:
                         recon2global = bg_asset['background']['config'].get('recon2world_translation', [0.0, 0.0, 0.0])
                         renderer.recon2global_translation = torch.tensor(recon2global[:2], device=self.device)
@@ -289,28 +405,66 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
                 if reset_asset:
                     renderer._prepare_metas()
                     renderer._init_gaussian_models()
-                    renderer.set_asset(renderer.asset_manager.background_asset)
+                    renderer.set_asset(renderer.asset_manager.background_asset_dict)
                     
-                    # Create minimal digitaltwin_agent2states
-                    renderer.digitaltwin_agent2states = {}
+                    # Calibrate agent states properly using ego2globals
+                    ego2globals = None
                     try:
-                        rig = artifact.rig
-                        if rig.trajectory.poses is not None and len(rig.trajectory.poses) > 0:
-                            first_pose = rig.trajectory.poses[0]
-                            renderer.digitaltwin_agent2states['ego'] = {
-                                'translation': torch.tensor(
-                                    [first_pose.vec3[0], first_pose.vec3[1], first_pose.vec3[2]],
-                                    device=self.device,
-                                    dtype=torch.float64
-                                ).unsqueeze(0),
-                                'rotation': torch.tensor(
-                                    [first_pose.quat.w, first_pose.quat.x, first_pose.quat.y, first_pose.quat.z],
-                                    device=self.device,
-                                    dtype=torch.float64
-                                ).unsqueeze(0),
-                            }
+                        # Try to get from video_scene_dict first
+                        if hasattr(renderer.asset_manager, 'video_scene_dict') and renderer.asset_manager.video_scene_dict:
+                            video_dict = renderer.asset_manager.video_scene_dict
+                            # Handle nested structure
+                            if isinstance(video_dict, dict) and 'ego2global' not in video_dict and 'frame_infos' not in video_dict:
+                                first_key = next(iter(video_dict.keys()), None)
+                                if first_key and isinstance(video_dict[first_key], dict):
+                                    video_dict = video_dict[first_key]
+                            
+                            # Check for frame_infos first (more common, 301 frames)
+                            if 'frame_infos' in video_dict and len(video_dict['frame_infos']) > 0:
+                                frame_infos = video_dict['frame_infos']
+                                ego2globals_list = []
+                                for fi in frame_infos:
+                                    if 'ego2global' in fi:
+                                        ego2globals_list.append(np.array(fi['ego2global']))
+                                if ego2globals_list:
+                                    ego2globals = np.stack(ego2globals_list)
+                            elif 'ego2global' in video_dict:
+                                ego2globals = np.array(video_dict['ego2global'])
+                                if ego2globals.ndim == 2:
+                                    ego2globals = ego2globals[np.newaxis, ...]
+                        
+                        # Fallback to rig trajectory
+                        if ego2globals is None:
+                            rig = artifact.rig
+                            if rig.trajectory.poses is not None and len(rig.trajectory.poses) > 0:
+                                poses = rig.trajectory.poses
+                                ego2globals_list = []
+                                for pose in poses:
+                                    if hasattr(pose.vec3, 'x'):
+                                        trans = np.array([pose.vec3.x, pose.vec3.y, pose.vec3.z])
+                                    else:
+                                        trans = np.array([pose.vec3[0], pose.vec3[1], pose.vec3[2]])
+                                    
+                                    if hasattr(pose.quat, 'w'):
+                                        quat = np.array([pose.quat.w, pose.quat.x, pose.quat.y, pose.quat.z])
+                                    else:
+                                        quat = np.array(pose.quat)
+                                    
+                                    from src.render.src.utils.gaussian_utils import quat_to_rotmat
+                                    quat_tensor = torch.tensor(quat, dtype=torch.float64).unsqueeze(0)
+                                    rot_mat = quat_to_rotmat(quat_tensor).squeeze(0).numpy()
+                                    
+                                    transform = np.eye(4)
+                                    transform[:3, :3] = rot_mat
+                                    transform[:3, 3] = trans
+                                    ego2globals_list.append(transform)
+                                
+                                ego2globals = np.stack(ego2globals_list)
                     except Exception as e:
-                        logger.warning(f"Could not create ego state: {e}")
+                        logger.warning(f"Could not compute ego2globals: {e}")
+                    
+                    # Calibrate agent states with ego2globals
+                    renderer.digitaltwin_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
                     
                     renderer.sensor_caches = None
                 
@@ -359,6 +513,9 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
                 if not success:
                     raise ValueError("Failed to encode image")
                 
+                # Save rendered image to disk for debugging/visualization
+                self._save_rendered_image(image, scene_id, camera_name, request.frame_start_us)
+                
                 return RGBRenderReturn(image_bytes=image_bytes.tobytes())
             else:
                 raise ValueError(f"Unexpected image type: {type(image)}")
@@ -396,6 +553,37 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         logger.info("shut_down")
         context.add_callback(self._shut_down)
         return Empty()
+
+    def _save_rendered_image(
+        self, 
+        image: np.ndarray, 
+        scene_id: str, 
+        camera_id: str, 
+        timestamp_us: int
+    ) -> None:
+        """Save rendered image to disk for visualization.
+        
+        Images are saved to: {workspace}/rendered_images/{scene_id}/{camera_id}_{timestamp}.jpg
+        """
+        import os
+        
+        # Create output directory
+        output_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))),
+            "rendered_images",
+            scene_id
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save image
+        filename = f"{camera_id}_{timestamp_us}.jpg"
+        filepath = os.path.join(output_dir, filename)
+        
+        success = cv2.imwrite(filepath, image)
+        if success:
+            logger.debug(f"Saved rendered image: {filepath}")
+        else:
+            logger.warning(f"Failed to save rendered image: {filepath}")
 
     def _shut_down(self) -> None:
         """Internal shutdown callback."""

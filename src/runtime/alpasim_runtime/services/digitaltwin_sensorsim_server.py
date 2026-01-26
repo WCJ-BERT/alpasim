@@ -20,8 +20,17 @@ from alpasim_grpc.v0.sensorsim_pb2_grpc import add_SensorsimServiceServicer_to_s
 from alpasim_runtime.services.digitaltwin_sensorsim_service import (
     DigitalTwinSensorsimService,
 )
+from alpasim_utils.data_source_loader import load_data_sources
 
 logger = logging.getLogger(__name__)
+
+# Mapping from trajdata dataset names to DigitalTwin asset folder subdirectories
+# Format: "nuplan_<split>" -> "data_nav<split>"
+TRAJDATA_TO_ASSET_FOLDER_MAPPING = {
+    "nuplan_test": "navtest",
+    "nuplan_train": "navtrain",
+    # Add more mappings as needed
+}
 
 
 def parse_args(arg_list: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
@@ -30,11 +39,16 @@ def parse_args(arg_list: list[str] | None = None) -> tuple[argparse.Namespace, l
         description="DigitalTwin Sensorsim Service Server",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
+    artifact_group = parser.add_mutually_exclusive_group(required=True)
+    artifact_group.add_argument(
         "--artifact-glob",
         type=str,
         help="Glob expression to find USDZ artifacts. Must end in .usdz",
-        required=True,
+    )
+    artifact_group.add_argument(
+        "--trajdata-config",
+        type=str,
+        help="Path to trajdata config YAML/JSON file",
     )
     parser.add_argument(
         "--asset-folder-path",
@@ -94,6 +108,100 @@ def load_scene_id_mapping(mapping_path: str | None) -> dict[str, str] | None:
         return None
 
 
+def resolve_asset_folder_path(
+    base_asset_folder_path: str,
+    trajdata_config_path: str | None = None,
+) -> str:
+    """
+    Resolve the full asset folder path based on trajdata config.
+    
+    If trajdata_config_path is provided, reads the desired_data from the config
+    and automatically appends the corresponding subdirectory to the base path.
+    
+    Args:
+        base_asset_folder_path: Base path to DigitalTwin asset folder
+        trajdata_config_path: Optional path to trajdata config YAML/JSON file
+    
+    Returns:
+        Resolved asset folder path (with subdirectory appended if applicable)
+    
+    Examples:
+        If base_asset_folder_path="/path/to/assets" and trajdata config has
+        desired_data=["nuplan_test"], returns "/path/to/assets/data_navtest"
+    """
+    base_path = Path(base_asset_folder_path)
+    
+    # If no trajdata config, return base path as-is
+    if trajdata_config_path is None:
+        return str(base_path)
+    
+    # Load trajdata config to extract desired_data
+    config_path = Path(trajdata_config_path)
+    if not config_path.exists():
+        logger.warning(
+            f"Trajdata config file not found: {config_path}. "
+            f"Using base asset folder path: {base_path}"
+        )
+        return str(base_path)
+    
+    try:
+        with open(config_path, "r") as f:
+            if config_path.suffix.lower() in [".yaml", ".yml"]:
+                import yaml
+                config = yaml.safe_load(f)
+            else:
+                # Assume JSON
+                config = json.load(f)
+        
+        # Extract desired_data from config
+        desired_data = config.get("desired_data", [])
+        if not desired_data:
+            logger.warning(
+                f"No 'desired_data' found in trajdata config. "
+                f"Using base asset folder path: {base_path}"
+            )
+            return str(base_path)
+        
+        # Use the first dataset name in desired_data
+        # (typically there's only one, but if multiple, use the first)
+        dataset_name = desired_data[0] if isinstance(desired_data, list) else desired_data
+        
+        # Look up the corresponding asset folder subdirectory
+        asset_subdir = TRAJDATA_TO_ASSET_FOLDER_MAPPING.get(dataset_name)
+        
+        if asset_subdir is None:
+            logger.warning(
+                f"No mapping found for dataset '{dataset_name}'. "
+                f"Available mappings: {list(TRAJDATA_TO_ASSET_FOLDER_MAPPING.keys())}. "
+                f"Using base asset folder path: {base_path}"
+            )
+            return str(base_path)
+        
+        # Construct full path: base_path / asset_subdir
+        full_path = base_path / asset_subdir / 'assets'
+        
+        # Verify the path exists
+        if not full_path.exists():
+            logger.warning(
+                f"Asset folder subdirectory does not exist: {full_path}. "
+                f"Using base asset folder path: {base_path}"
+            )
+            return str(base_path)
+        
+        logger.info(
+            f"Auto-resolved asset folder path: {base_path} -> {full_path} "
+            f"(based on dataset '{dataset_name}' -> '{asset_subdir}')"
+        )
+        return str(full_path)
+        
+    except Exception as e:
+        logger.error(
+            f"Failed to resolve asset folder path from trajdata config: {e}. "
+            f"Using base asset folder path: {base_path}"
+        )
+        return str(base_path)
+
+
 def main(arg_list: list[str] | None = None) -> None:
     """Main entry point for the server."""
     args, _ = parse_args(arg_list)
@@ -105,9 +213,26 @@ def main(arg_list: list[str] | None = None) -> None:
     )
     
     logger.info("Starting DigitalTwin Sensorsim Service")
-    logger.info(f"Artifact glob: {args.artifact_glob}")
-    logger.info(f"Asset folder path: {args.asset_folder_path}")
+    
+    # Resolve asset folder path based on trajdata config if provided
+    # This automatically appends the correct subdirectory (e.g., data_navtest) 
+    # based on the desired_data in trajdata config
+    resolved_asset_folder_path = resolve_asset_folder_path(
+        base_asset_folder_path=args.asset_folder_path,
+        trajdata_config_path=args.trajdata_config if not args.artifact_glob else None,
+    )
+    
+    # Load artifacts from either USDZ glob or trajdata config
+    if args.artifact_glob:
+        logger.info(f"Loading artifacts from USDZ glob: {args.artifact_glob}")
+        artifacts = load_data_sources(usdz_glob=args.artifact_glob)
+    else:
+        logger.info(f"Loading artifacts from trajdata config: {args.trajdata_config}")
+        artifacts = load_data_sources(trajdata_config_path=args.trajdata_config)
+    
+    logger.info(f"Asset folder path: {resolved_asset_folder_path}")
     logger.info(f"Device: {args.device}")
+    logger.info(f"Loaded {len(artifacts)} scenes")
     
     # Load scene_id to asset_id mapping if provided
     scene_id_mapping = load_scene_id_mapping(args.scene_id_to_asset_id_mapping)
@@ -120,8 +245,8 @@ def main(arg_list: list[str] | None = None) -> None:
     # Create and register service
     service = DigitalTwinSensorsimService(
         server=server,
-        artifact_glob=args.artifact_glob,
-        asset_folder_path=args.asset_folder_path,
+        artifacts=artifacts,
+        asset_folder_path=resolved_asset_folder_path,
         scene_id_to_asset_id_mapping=scene_id_mapping,
         cache_size=args.cache_size,
         device=args.device,

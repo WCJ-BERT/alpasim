@@ -18,11 +18,11 @@ except ImportError:
 
 from src.utils.alpasim_utils.geometry_utils import Sim2
 from src.render.base_renderer import BaseRenderer, RenderState
-from src.utils.gaussian_utils import matrix_to_quaternion, quat_to_rotmat, quat_to_angle
-from src.utils.portable_utils import convert_to_attribute_dict, AttrDict
-from src.gaussian_model.vanilla_gaussian_splatting import VanillaPortableGaussianModel as VanillaModel
-from src.gaussian_model.rigid_object import RigidPortableSubModel as RigidModel
-from src.gaussian_model.rigid_object_mirrored import MirroredRigidPortableSubModel as MirroredModel
+from src.render.src.utils.gaussian_utils import matrix_to_quaternion, quat_to_rotmat, quat_to_angle
+from src.render.src.utils.portable_utils import convert_to_attribute_dict, AttrDict
+from src.render.src.gaussian_model.vanilla_gaussian_splatting import VanillaPortableGaussianModel as VanillaModel
+from src.render.src.gaussian_model.rigid_object import RigidPortableSubModel as RigidModel
+from src.render.src.gaussian_model.rigid_object_mirrored import MirroredRigidPortableSubModel as MirroredModel
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class DigitalTwin(BaseRenderer):
         self.bg_color = self._init_background_color(background_color)
         self.asset_manager = DigitalTwinAssetManager(Path(asset_folder_path), self.device)
         self.sensor_caches = None
+        self.world_to_nre = None  
 
     def _init_background_color(self, background_color):
         if isinstance(background_color, str):
@@ -124,18 +125,30 @@ class DigitalTwin(BaseRenderer):
         if reset_asset:
             self._prepare_metas()
             self._init_gaussian_models()
-            self.set_asset(self.asset_manager.background_asset)
+            self.set_asset(self.asset_manager.background_asset_dict)
             # Note: calibrate_agent_state now requires ego2globals to be passed explicitly
             # This will be called separately with the required data
             self.sensor_caches = None
+        
+        # Reset world_to_nre when changing scenes
+        self.world_to_nre = None
+        
+        # Mark as initialized for this scene
+        self._scene_id = current_scene_id
+        self._initialized = True
+        logger.info(f"Renderer reset completed for scene {current_scene_id} (asset: {asset_id})")
 
+    def set_world_to_nre(self, world_to_nre: np.ndarray):
+        self.world_to_nre = world_to_nre
+        logger.info(f"Set world_to_nre transformation: translation={world_to_nre[:3, 3]}")
+    
     def calibrate_agent_state(self, ego2globals: Optional[torch.Tensor] = None):
         """
         Get the agent states in the reconstruction.
         
         Args:
-            ego2globals: Optional tensor of shape [N, 4, 4] containing ego-to-global transformation matrices.
-                        If None, will try to extract from loaded gaussian models.
+            ego2globals: Optional array/tensor of shape [N, 4, 4] containing ego-to-global transformation matrices.
+                        Can be numpy array or torch.Tensor. If None, will try to extract from loaded gaussian models.
         
         Returns:
             Dictionary mapping agent IDs to their states (translation and rotation)
@@ -144,12 +157,21 @@ class DigitalTwin(BaseRenderer):
         
         # Handle ego state from ego2globals if provided
         if ego2globals is not None:
-            ego2globals = torch.tensor(ego2globals, dtype=torch.float64, device=self.device)
-            if ego2globals.ndim == 2:
-                ego2globals = ego2globals.unsqueeze(0)  # Add batch dimension if needed
+            # Convert to torch tensor if it's a numpy array
+            if isinstance(ego2globals, np.ndarray):
+                ego2globals_tensor = torch.tensor(ego2globals, dtype=torch.float64, device=self.device)
+            else:
+                # Already a torch tensor, just ensure correct dtype and device
+                ego2globals_tensor = ego2globals.to(dtype=torch.float64, device=self.device)
             
-            digitaltwin_ego2globals_trans = ego2globals[:, :3, 3]
-            digitaltwin_ego2globals_quat = matrix_to_quaternion(ego2globals[:, :3, :3])
+            if ego2globals_tensor.ndim == 2:
+                ego2globals_tensor = ego2globals_tensor.unsqueeze(0)  # Add batch dimension if needed
+            
+            # Extract translation and rotation from ego2globals
+            # Directly use them without any transformation (matching WorldEngine's behavior)
+            digitaltwin_ego2globals_trans = ego2globals_tensor[:, :3, 3]
+            digitaltwin_ego2globals_quat = matrix_to_quaternion(ego2globals_tensor[:, :3, :3])
+            
             digitaltwin_agent2states['ego'] = {
                 'translation': digitaltwin_ego2globals_trans,
                 'rotation': digitaltwin_ego2globals_quat,
@@ -270,38 +292,54 @@ class DigitalTwin(BaseRenderer):
         return camera_to_worlds, intrinsics, map_inverse_distorts, {"height": height, "width": width}
 
     def update_world(self, timestamp, agent_states):
-        if self.timestamp == timestamp:
+        
+        if (self.timestamp == timestamp and 
+            hasattr(self, "collected_gaussians") and 
+            self.collected_gaussians and 
+            'means' in self.collected_gaussians):
             return
-        self.timestamp = timestamp
-        if hasattr(self, "collected_gaussians"):
-            del self.collected_gaussians
-        self.collected_gaussians = {}
         gs_dict = {
             "means": [],
             "scales": [],
             "quats": [],
             "opacities": [],
         }
-
         for asset_token in self.node_types.keys():
             gaussian_model = self.gaussian_models[self.submodel_names[asset_token]]
             if asset_token in agent_states.keys():
                 quat, trans = self.get_agent_pose(asset_token, agent_states[asset_token])
             else:
-                quat, trans = None, None            # use original log
+                quat, trans = None, None            # use original log (for background, skybox, etc.)
 
-            gs = gaussian_model.get_global_gaussians(
-                quat=quat,
-                trans=trans,
-                timestamp=timestamp,
-            )
-            if gs is None:
-                continue
-            for k in gs_dict.keys():
-                gs_dict[k].append(gs[k].to(self.device))
-            
-        for key, value in gs_dict.items():
-            self.collected_gaussians[key] = torch.cat(value, dim=0)
+            try:
+                gs = gaussian_model.get_global_gaussians(
+                    quat=quat,
+                    trans=trans,
+                    timestamp=timestamp,
+                )
+                if gs is None:
+                    logger.warning(f"get_global_gaussians returned None for {asset_token}")
+                    continue
+                for k in gs_dict.keys():
+                    gs_dict[k].append(gs[k].to(self.device))
+            except Exception as e:
+                logger.error(f"Error collecting gaussians for {asset_token}: {e}", exc_info=True)
+                raise
+        
+        # Check if any gaussians were collected
+        if not gs_dict["means"]:
+            logger.error(f"No gaussians collected in update_world! node_types: {list(self.node_types.keys())}, agent_states: {list(agent_states.keys())}, timestamp={timestamp}")
+            raise RuntimeError(f"No gaussians collected - no models available for timestamp {timestamp}")
+        
+        try:
+            new_collected_gaussians = {}
+            for key, value in gs_dict.items():
+                new_collected_gaussians[key] = torch.cat(value, dim=0)
+            self.collected_gaussians = new_collected_gaussians
+            self.timestamp = timestamp
+        except Exception as e:
+            logger.error(f"Failed to merge gaussians: {e}", exc_info=True)
+            raise
 
     def update_gaussian_rgbs(self, camera_to_worlds):
         rgb_list = []
@@ -325,15 +363,30 @@ class DigitalTwin(BaseRenderer):
     @torch.no_grad()
     def render(self, render_state: RenderState):
         timestamp = render_state[RenderState.TIMESTAMP]
-        agent_states = render_state[RenderState.AGENT_STATE]
-        for agent_state in agent_states.values():
-            agent_state[:2] -= self.recon2global_translation[:2]
+        agent_states = render_state[RenderState.AGENT_STATE] # Simulator Local (Ego rear-axis)
+        
+        converted_agent_states = {}
+        for agent_id, agent_state in agent_states.items():
+            agent_state_np = np.array(agent_state, dtype=np.float64)
+            
+            # Step 1: Simulator Local → Nuplan Global
+            if self.local2global_translation_xy is not None:
+                agent_state_np[:2] += self.local2global_translation_xy
+            
+            # Step 2: Nuplan Global → Reconstruction Local 
+            if isinstance(self.recon2global_translation, torch.Tensor):
+                recon2global_xy = self.recon2global_translation[:2].cpu().numpy()
+            else:
+                recon2global_xy = np.array(self.recon2global_translation[:2])
+            agent_state_np[:2] -= recon2global_xy
+            
+            converted_agent_states[agent_id] = agent_state_np
 
         self.update_world(
             timestamp=timestamp,
-            agent_states=agent_states,
+            agent_states=converted_agent_states,
         )
-        ego2global_raw = self.get_agent_pose('ego', agent_states['ego'], return_matrix=True)
+        ego2global_raw = self.get_agent_pose('ego', converted_agent_states['ego'], return_matrix=True)
         ego2global = ego2global_raw.to(device=self.device, dtype=torch.float32)
 
         cameras = render_state[RenderState.CAMERAS]
@@ -404,7 +457,7 @@ class DigitalTwin(BaseRenderer):
                     map_inverse_distorts[cam_idx][1], cv2.INTER_LINEAR)
         return_dict = {
             'cameras': sensor_dict, 
-            'lidars': {}    # TODO: support LiDAR rendering
+            'lidars': {}    # LiDAR rendering is not supported
         }
 
         ego2global_nuplan = ego2global_raw.cpu().numpy()
@@ -455,6 +508,12 @@ class DigitalTwin(BaseRenderer):
             quat = matrix_to_quaternion(new_rot_matrix)
             trans = new_trans
             return quat, trans
+    
+    @property
+    def local2global_translation_xy(self) -> Optional[np.ndarray]:
+        if self.world_to_nre is None:
+            return None
+        return -self.world_to_nre[:2, 3]
 
 
 class DigitalTwinAssetManager:
@@ -471,14 +530,10 @@ class DigitalTwinAssetManager:
         if self.current_asset_id == asset_id:
             return False
 
-        if getattr(self, "background_asset", None) is not None:
-            try:
-                if hasattr(self.background_asset, "to"):
-                    self.background_asset.to("cpu")
-            except Exception:
-                pass
-            del self.background_asset
-            self.background_asset = None
+        # Clean up old assets
+        if getattr(self, "background_asset_dict", None) is not None:
+            del self.background_asset_dict
+            self.background_asset_dict = None
             torch.cuda.empty_cache()
 
         self.current_asset_id = asset_id
@@ -490,20 +545,33 @@ class DigitalTwinAssetManager:
         Folder structure:
             {asset_dir}
             ├── background
-            ├── foreground
-            └── road_height_map
+            ├── road_height_map
+            └── video_scene_dict.pkl (contains ego2global, etc.)
         """
         self.asset_dir = Path(self.asset_folder_path) / self.current_asset_id
         logger.info(f"Loading assets from asset {self.current_asset_id}...")
-        # load background asset
+        # load background asset (includes background, skybox, and rigid objects)
         background_asset_path = self.asset_dir / 'background' / f'{self.current_asset_id}.ckpt'
-        self.background_asset = torch.load(background_asset_path, map_location=self.device)
+        self.background_asset_dict = torch.load(background_asset_path, map_location=self.device)
+        logger.info(f"Loaded background asset dict with {len(self.background_asset_dict)} models")
 
         road_height_map_path = self.asset_dir / 'road_height_map'
         self.road_height_map = dict(
             map = np.load(road_height_map_path / 'road_height_map.npy'),
             sim2 = Sim2.from_json(road_height_map_path / 'sim2.json')
         )
+
+        # Load video_scene_dict_final.pkl if available (contains ego2global, etc.)
+        video_scene_dict_path = self.asset_dir / 'video_scene_dict.pkl'
+        self.video_scene_dict = None
+        if video_scene_dict_path.exists():
+            try:
+                import pickle
+                with open(video_scene_dict_path, 'rb') as f:
+                    self.video_scene_dict = pickle.load(f)
+                logger.info(f"Loaded video_scene_dict from {video_scene_dict_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load video_scene_dict.pkl: {e}")
 
         # TODO: load foreground assets.
         self.foreground_asset_dir = self.asset_dir / 'foreground'
