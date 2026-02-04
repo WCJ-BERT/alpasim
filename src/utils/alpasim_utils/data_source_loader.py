@@ -2,7 +2,7 @@
 # Copyright (c) 2025 NVIDIA Corporation
 
 """
-统一的数据源加载器：支持从 USDZ 或 trajdata 加载数据
+Unified data source loader: supports loading data from USDZ or trajdata.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def load_data_sources(
     smooth_trajectories: bool = True,
 ) -> dict[str, SceneDataSource]:
     """
-    统一的数据源加载函数，支持从 USDZ 或 trajdata 加载。
+    Unified data source loading function that supports loading from USDZ or trajdata.
     
     Args:
         usdz_glob: Glob pattern for USDZ files (mutually exclusive with trajdata_config_path)

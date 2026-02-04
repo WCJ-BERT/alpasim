@@ -531,12 +531,136 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         request: AggregatedRenderRequest,
         context: grpc.ServicerContext,
     ) -> AggregatedRenderReturn:
-        """Render multiple RGB images (not fully implemented yet)."""
-        # For now, render each request individually
+        """Render multiple RGB images efficiently by batching."""
+        if not request.rgb_requests:
+            return AggregatedRenderReturn()
+        
+        # Check if all requests can be batched (same scene, same timestamp)
+        first_request = request.rgb_requests[0]
+        scene_id = first_request.scene_id
+        frame_start_us = first_request.frame_start_us
+        
+        can_batch = all(
+            req.scene_id == scene_id and req.frame_start_us == frame_start_us
+            for req in request.rgb_requests
+        )
+        
+        if not can_batch:
+            # Fallback: render each request individually
+            logger.warning(
+                f"Cannot batch render_aggregated: requests have different scenes or timestamps. "
+                f"Falling back to sequential rendering."
+            )
+            rgb_returns = []
+            for rgb_request in request.rgb_requests:
+                rgb_return = self.render_rgb(rgb_request, context)
+                rgb_returns.append(rgb_return)
+            return AggregatedRenderReturn(rgb_returns=rgb_returns)
+        
+        # Optimized path: batch render all cameras in one call
+        try:
+            return self._render_aggregated_batch(request, context)
+        except Exception as e:
+            logger.exception(f"Batch rendering failed: {e}. Falling back to sequential rendering.")
+            # Fallback to sequential rendering
+            rgb_returns = []
+            for rgb_request in request.rgb_requests:
+                try:
+                    rgb_return = self.render_rgb(rgb_request, context)
+                    rgb_returns.append(rgb_return)
+                except Exception as req_error:
+                    logger.error(f"Failed to render camera {rgb_request.camera_intrinsics.logical_id}: {req_error}")
+                    rgb_returns.append(RGBRenderReturn())  # Empty response for failed camera
+            return AggregatedRenderReturn(rgb_returns=rgb_returns)
+
+    def _render_aggregated_batch(
+        self,
+        request: AggregatedRenderRequest,
+        context: grpc.ServicerContext,
+    ) -> AggregatedRenderReturn:
+        """
+        Optimized batch rendering: render once, extract all cameras.
+        
+        This method assumes all requests have the same scene_id and frame_start_us.
+        """
+        first_request = request.rgb_requests[0]
+        scene_id = first_request.scene_id
+        
+        if scene_id not in self.artifacts:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"Scene {scene_id} not found")
+            return AggregatedRenderReturn()
+        
+        artifact = self.artifacts[scene_id]
+        renderer = self.get_renderer(scene_id)
+        
+        # Convert first request to RenderState (all requests share same ego state and timestamp)
+        render_state_dict = rgb_render_request_to_render_state(
+            first_request, 
+            asset_manager=renderer.asset_manager
+        )
+        render_state = RenderState(**render_state_dict)
+        
+        # Single render call for all cameras
+        logger.info(f"Batch rendering {len(request.rgb_requests)} cameras for scene {scene_id}")
+        result = renderer.render(render_state)
+        
+        if "cameras" not in result:
+            raise ValueError("Renderer did not return cameras in result")
+        
+        cameras_dict = result["cameras"]
+        if not cameras_dict:
+            raise ValueError("No cameras in render result")
+        
+        # Extract and encode images for all requested cameras
         rgb_returns = []
         for rgb_request in request.rgb_requests:
-            rgb_return = self.render_rgb(rgb_request, context)
-            rgb_returns.append(rgb_return)
+            camera_name = rgb_request.camera_intrinsics.logical_id
+            
+            # Get image for this camera
+            if camera_name in cameras_dict and "image" in cameras_dict[camera_name]:
+                image = cameras_dict[camera_name]["image"]
+            else:
+                logger.warning(f"Camera {camera_name} not found in render result, using first available")
+                first_camera = next(iter(cameras_dict.values()))
+                image = first_camera.get("image")
+            
+            if image is None:
+                logger.error(f"No image found for camera {camera_name}")
+                rgb_returns.append(RGBRenderReturn())
+                continue
+            
+            # Encode image
+            if not isinstance(image, np.ndarray):
+                logger.error(f"Unexpected image type for camera {camera_name}: {type(image)}")
+                rgb_returns.append(RGBRenderReturn())
+                continue
+            
+            # Encode based on format
+            if rgb_request.image_format == 1:  # PNG
+                success, image_bytes = cv2.imencode(".png", image)
+            elif rgb_request.image_format == 2:  # JPEG
+                success, image_bytes = cv2.imencode(
+                    ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, int(rgb_request.image_quality)]
+                )
+            else:
+                # Default to JPEG
+                success, image_bytes = cv2.imencode(".jpg", image)
+            
+            if not success:
+                logger.error(f"Failed to encode image for camera {camera_name}")
+                rgb_returns.append(RGBRenderReturn())
+                continue
+            
+            # Save rendered image to disk for debugging/visualization
+            self._save_rendered_image(image, scene_id, camera_name, rgb_request.frame_start_us)
+            
+            rgb_returns.append(RGBRenderReturn(image_bytes=image_bytes.tobytes()))
+        
+        logger.info(f"Batch rendering completed: {len(rgb_returns)}/{len(request.rgb_requests)} cameras successful")
+        
+        # Save panorama view combining all cameras
+        self._save_panorama_view(cameras_dict, scene_id, first_request.frame_start_us)
         
         return AggregatedRenderReturn(rgb_returns=rgb_returns)
 
@@ -584,6 +708,80 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             logger.debug(f"Saved rendered image: {filepath}")
         else:
             logger.warning(f"Failed to save rendered image: {filepath}")
+    
+    def _save_panorama_view(
+        self,
+        cameras_dict: dict,
+        scene_id: str,
+        timestamp_us: int,
+        target_size: tuple = (640, 360) 
+    ) -> None:
+        """
+        Save a 3x3 panorama view combining all 8 cameras with center black.
+        
+        Layout:
+            CAM_L0  CAM_F0  CAM_R0
+            CAM_L1  BLACK   CAM_R1
+            CAM_L2  CAM_B0  CAM_R2
+        
+        Args:
+            cameras_dict: Dictionary of camera images from renderer
+            scene_id: Scene ID for output directory
+            timestamp_us: Timestamp for filename
+            target_size: Size to resize each camera view (width, height)
+        """
+        import os
+        
+        # Camera layout mapping (3x3 grid)
+        layout = [
+            ['CAM_L0', 'CAM_F0', 'CAM_R0'],
+            ['CAM_L1', 'BLACK',  'CAM_R1'],
+            ['CAM_L2', 'CAM_B0', 'CAM_R2']
+        ]
+        
+        # Create black placeholder
+        black_image = np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8)
+        
+        # Build panorama row by row
+        rows = []
+        for row_cameras in layout:
+            row_images = []
+            for camera_id in row_cameras:
+                if camera_id == 'BLACK':
+                    row_images.append(black_image)
+                elif camera_id in cameras_dict and 'image' in cameras_dict[camera_id]:
+                    # Resize camera image to target size
+                    img = cameras_dict[camera_id]['image']
+                    resized = cv2.resize(img, target_size, interpolation=cv2.INTER_LINEAR)
+                    row_images.append(resized)
+                else:
+                    # Missing camera - use black placeholder
+                    logger.warning(f"Camera {camera_id} not found for panorama view")
+                    row_images.append(black_image)
+            
+            # Concatenate images horizontally
+            row_image = np.hstack(row_images)
+            rows.append(row_image)
+        
+        # Concatenate all rows vertically
+        panorama = np.vstack(rows)
+        
+        # Save panorama
+        output_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))),
+            "rendered_images",
+            scene_id
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        
+        filename = f"panorama_{timestamp_us}.jpg"
+        filepath = os.path.join(output_dir, filename)
+        
+        success = cv2.imwrite(filepath, panorama)
+        if success:
+            logger.info(f"Saved panorama view ({panorama.shape[1]}x{panorama.shape[0]}): {filepath}")
+        else:
+            logger.warning(f"Failed to save panorama view: {filepath}")
 
     def _shut_down(self) -> None:
         """Internal shutdown callback."""
