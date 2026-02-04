@@ -2,9 +2,9 @@
 # Copyright (c) 2025 NVIDIA Corporation
 
 """
-Server script for DigitalTwin Sensorsim Service.
+Server script for MTGS Sensorsim Service.
 
-This script starts a gRPC server that exposes the worldengine DigitalTwin renderer
+This script starts a gRPC server that exposes the MTGS renderer
 as a SensorsimService, allowing it to replace the default sensorsim in alpasim.
 """
 
@@ -17,14 +17,14 @@ from pathlib import Path
 import grpc
 
 from alpasim_grpc.v0.sensorsim_pb2_grpc import add_SensorsimServiceServicer_to_server
-from alpasim_runtime.services.digitaltwin_sensorsim_service import (
-    DigitalTwinSensorsimService,
+from alpasim_runtime.services.mtgs_sensorsim_service import (
+    MTGSSensorsimService,
 )
 from alpasim_utils.data_source_loader import load_data_sources
 
 logger = logging.getLogger(__name__)
 
-# Mapping from trajdata dataset names to DigitalTwin asset folder subdirectories
+# Mapping from trajdata dataset names to MTGS asset folder subdirectories
 # Format: "nuplan_<split>" -> "data_nav<split>"
 TRAJDATA_TO_ASSET_FOLDER_MAPPING = {
     "nuplan_test": "navtest",
@@ -36,7 +36,7 @@ TRAJDATA_TO_ASSET_FOLDER_MAPPING = {
 def parse_args(arg_list: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="DigitalTwin Sensorsim Service Server",
+        description="MTGS Sensorsim Service Server",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     artifact_group = parser.add_mutually_exclusive_group(required=True)
@@ -53,7 +53,7 @@ def parse_args(arg_list: list[str] | None = None) -> tuple[argparse.Namespace, l
     parser.add_argument(
         "--asset-folder-path",
         type=str,
-        help="Path to DigitalTwin asset folder containing scene assets",
+        help="Path to MTGS asset folder containing scene assets",
         required=True,
     )
     parser.add_argument(
@@ -119,7 +119,7 @@ def resolve_asset_folder_path(
     and automatically appends the corresponding subdirectory to the base path.
     
     Args:
-        base_asset_folder_path: Base path to DigitalTwin asset folder
+        base_asset_folder_path: Base path to MTGS asset folder
         trajdata_config_path: Optional path to trajdata config YAML/JSON file
     
     Returns:
@@ -212,7 +212,7 @@ def main(arg_list: list[str] | None = None) -> None:
         datefmt="%H:%M:%S",
     )
     
-    logger.info("Starting DigitalTwin Sensorsim Service")
+    logger.info("Starting MTGS Sensorsim Service")
     
     # Resolve asset folder path based on trajdata config if provided
     # This automatically appends the correct subdirectory (e.g., data_navtest) 
@@ -243,7 +243,7 @@ def main(arg_list: list[str] | None = None) -> None:
     server.add_insecure_port(address)
     
     # Create and register service
-    service = DigitalTwinSensorsimService(
+    service = MTGSSensorsimService(
         server=server,
         artifacts=artifacts,
         asset_folder_path=resolved_asset_folder_path,
@@ -253,7 +253,7 @@ def main(arg_list: list[str] | None = None) -> None:
     )
     add_SensorsimServiceServicer_to_server(service, server)
     
-    logger.info(f"Serving DigitalTwin Sensorsim Service on {address}")
+    logger.info(f"Serving MTGS Sensorsim Service on {address}")
     server.start()
     
     try:

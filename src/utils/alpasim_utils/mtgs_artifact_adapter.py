@@ -2,11 +2,11 @@
 # Copyright (c) 2025 NVIDIA Corporation
 
 """
-Adapter for converting alpasim data formats to worldengine DigitalTwin renderer formats.
+Adapter for converting alpasim data formats to MTGS renderer formats.
 
 This module provides conversion utilities between:
 - alpasim gRPC messages (RGBRenderRequest, PosePair, etc.)
-- worldengine RenderState and camera configurations
+- MTGS RenderState and camera configurations
 """
 
 from __future__ import annotations
@@ -71,14 +71,14 @@ def camera_spec_to_worldengine_format(
     camera_spec: CameraSpec, rig_to_camera: Optional[GrpcPose] = None
 ) -> Dict:
     """
-    Convert alpasim CameraSpec to worldengine camera format.
+    Convert alpasim CameraSpec to MTGS camera format.
     
     Args:
         camera_spec: CameraSpec from gRPC message
         rig_to_camera: Optional rig_to_camera pose transformation
         
     Returns:
-        Dictionary in worldengine camera format:
+        Dictionary in MTGS camera format:
         {
             "channel": str,
             "sensor2ego_rotation": np.ndarray (quaternion),
@@ -154,7 +154,7 @@ def pose_pair_to_agent_state(
     start_pose: GrpcPose, end_pose: GrpcPose, use_start: bool = True
 ) -> np.ndarray:
     """
-    Convert PosePair to worldengine agent_state format [x, y, z, 0, 0, heading].
+    Convert PosePair to MTGS agent_state format [x, y, z, 0, 0, heading].
     
     Args:
         start_pose: Start pose from PosePair
@@ -171,7 +171,7 @@ def pose_pair_to_agent_state(
     q = Quaternion(quat[0], quat[1], quat[2], quat[3])
     yaw = q.yaw_pitch_roll[0]
     
-    # worldengine format: [x, y, z, 0, 0, heading]
+    # MTGS format: [x, y, z, 0, 0, heading]
     return np.array([trans[0], trans[1], trans[2], 0.0, 0.0, yaw], dtype=np.float64)
 
 
@@ -180,7 +180,7 @@ def rgb_render_request_to_render_state(
     asset_manager: Optional[Any] = None,
 ) -> Dict:
     """
-    Convert RGBRenderRequest to worldengine RenderState format.
+    Convert RGBRenderRequest to MTGS RenderState format.
     
     Simplified version: Only extracts scene_id, AGENT_STATE, and TIMESTAMP from request.
     Camera information is loaded from asset_manager's video_scene_dict (pkl file).
@@ -188,10 +188,10 @@ def rgb_render_request_to_render_state(
     Args:
         request: RGBRenderRequest from gRPC (only scene_id, agent_state, timestamp are used)
         data_source: Optional SceneDataSource (used for backward compatibility with sensor_pose)
-        asset_manager: DigitalTwinAssetManager for accessing video_scene_dict (required for cameras)
+        asset_manager: MTGSAssetManager for accessing video_scene_dict (required for cameras)
         
     Returns:
-        Dictionary compatible with worldengine RenderState:
+        Dictionary compatible with MTGS RenderState:
         {
             "timestamp": int (microseconds),
             "agent_state": Dict[str, np.ndarray],  # {object_id: [x, y, z, 0, 0, heading]}
@@ -205,7 +205,7 @@ def rgb_render_request_to_render_state(
     # Priority: 1) ego_pose (new field), 2) sensor_pose (backward compatibility)
     agent_states = {}
     if request.HasField("ego_pose"):
-        # Use ego_pose directly (preferred for DigitalTwin renderer)
+        # Use ego_pose directly (preferred for MTGS renderer)
         ego_state = pose_pair_to_agent_state(
             request.ego_pose.start_pose,
             request.ego_pose.end_pose,
@@ -259,31 +259,31 @@ def rgb_render_request_to_render_state(
             if 'cams' not in frame_info:
                 logger.warning("No 'cams' found in frame_infos[0]")
             else:
-                for cam_name, digitaltwin_cam_info in frame_info['cams'].items():
+                for cam_name, mtgs_cam_info in frame_info['cams'].items():
                     # Extract intrinsic and distortion (prefer colmap_param if available)
                     # These are from colmap optimization and should be used as-is
-                    if 'colmap_param' in digitaltwin_cam_info:
-                        intrinsic = np.array(digitaltwin_cam_info['colmap_param']['cam_intrinsic'])
-                        distortion = np.array(digitaltwin_cam_info['colmap_param']['distortion'])
+                    if 'colmap_param' in mtgs_cam_info:
+                        intrinsic = np.array(mtgs_cam_info['colmap_param']['cam_intrinsic'])
+                        distortion = np.array(mtgs_cam_info['colmap_param']['distortion'])
                     else:
-                        intrinsic = np.array(digitaltwin_cam_info['cam_intrinsic'])
-                        distortion = np.array(digitaltwin_cam_info['distortion'])
+                        intrinsic = np.array(mtgs_cam_info['cam_intrinsic'])
+                        distortion = np.array(mtgs_cam_info['distortion'])
                     
                     # Extract sensor2ego transformation from pkl
                     # NOTE: Our analysis shows that sensor2ego in video_scene_dict is ALREADY correct
                     # (relative to rear axle, matching Nuplan SDK standard)
                     # So we use it directly without override
-                    sensor2ego_rotation = digitaltwin_cam_info['sensor2ego_rotation']
+                    sensor2ego_rotation = mtgs_cam_info['sensor2ego_rotation']
                     if isinstance(sensor2ego_rotation, Quaternion):
                         sensor2ego_rotation = sensor2ego_rotation.elements
                     else:
                         sensor2ego_rotation = np.array(sensor2ego_rotation)
                     
-                    sensor2ego_translation = np.array(digitaltwin_cam_info['sensor2ego_translation'])
+                    sensor2ego_translation = np.array(mtgs_cam_info['sensor2ego_translation'])
                     
                     # Get resolution (default to 1080x1920)
-                    height = digitaltwin_cam_info.get('height', 1080)
-                    width = digitaltwin_cam_info.get('width', 1920)
+                    height = mtgs_cam_info.get('height', 1080)
+                    width = mtgs_cam_info.get('width', 1920)
                     
                     cameras[cam_name] = {
                         'channel': cam_name,

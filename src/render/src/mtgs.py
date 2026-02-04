@@ -41,7 +41,7 @@ def auto_submodel(atom_asset):
     return MODEL_MAPPING[original_model_type]
 
 
-class DigitalTwin(BaseRenderer):
+class MTGS(BaseRenderer):
     def __init__(
         self,
         *args,
@@ -59,7 +59,7 @@ class DigitalTwin(BaseRenderer):
         self.rasterize_mode = rasterize_mode
         self.radius_clip = radius_clip
         self.bg_color = self._init_background_color(background_color)
-        self.asset_manager = DigitalTwinAssetManager(Path(asset_folder_path), self.device)
+        self.asset_manager = MTGSAssetManager(Path(asset_folder_path), self.device)
         self.sensor_caches = None
         self.world_to_nre = None  
 
@@ -153,7 +153,7 @@ class DigitalTwin(BaseRenderer):
         Returns:
             Dictionary mapping agent IDs to their states (translation and rotation)
         """
-        digitaltwin_agent2states = {}
+        mtgs_agent2states = {}
         
         # Handle ego state from ego2globals if provided
         if ego2globals is not None:
@@ -169,12 +169,12 @@ class DigitalTwin(BaseRenderer):
             
             # Extract translation and rotation from ego2globals
             # Directly use them without any transformation (matching WorldEngine's behavior)
-            digitaltwin_ego2globals_trans = ego2globals_tensor[:, :3, 3]
-            digitaltwin_ego2globals_quat = matrix_to_quaternion(ego2globals_tensor[:, :3, :3])
+            mtgs_ego2globals_trans = ego2globals_tensor[:, :3, 3]
+            mtgs_ego2globals_quat = matrix_to_quaternion(ego2globals_tensor[:, :3, :3])
             
-            digitaltwin_agent2states['ego'] = {
-                'translation': digitaltwin_ego2globals_trans,
-                'rotation': digitaltwin_ego2globals_quat,
+            mtgs_agent2states['ego'] = {
+                'translation': mtgs_ego2globals_trans,
+                'rotation': mtgs_ego2globals_quat,
             }
 
         # Extract agent states from loaded gaussian models
@@ -187,11 +187,11 @@ class DigitalTwin(BaseRenderer):
 
             in_frame_mask = self.gaussian_models[model_name].log_trans[:, 2] < 1000
 
-            digitaltwin_agent2states[asset_token] = {
+            mtgs_agent2states[asset_token] = {
                 'translation': self.gaussian_models[model_name].log_trans[in_frame_mask].double(),
                 'rotation': self.gaussian_models[model_name].log_quats[in_frame_mask].double(),
             }
-        return digitaltwin_agent2states
+        return mtgs_agent2states
 
     def get_submodel_name(self, token):
         node_type = self.node_types[token]
@@ -471,17 +471,17 @@ class DigitalTwin(BaseRenderer):
         return return_dict
 
     def get_agent_pose(self, name, agent_state, return_matrix=False):
-        if name not in self.digitaltwin_agent2states.keys():
+        if name not in self.mtgs_agent2states.keys():
             return None if return_matrix else (None, None)
 
-        digitaltwin_agent_state = self.digitaltwin_agent2states[name]
+        mtgs_agent_state = self.mtgs_agent2states[name]
 
         agent_state_xy = torch.tensor(agent_state[:2], device=self.device, dtype=torch.float64)
         agent_state_heading = torch.tensor(agent_state[-1], device=self.device, dtype=torch.float64)
 
-        nearsest_idx = torch.argmin(torch.norm(digitaltwin_agent_state['translation'][:, :2] - agent_state_xy, dim=-1))
-        log_trans = digitaltwin_agent_state['translation'][nearsest_idx]
-        log_quat = digitaltwin_agent_state['rotation'][nearsest_idx]
+        nearsest_idx = torch.argmin(torch.norm(mtgs_agent_state['translation'][:, :2] - agent_state_xy, dim=-1))
+        log_trans = mtgs_agent_state['translation'][nearsest_idx]
+        log_quat = mtgs_agent_state['rotation'][nearsest_idx]
 
         log_rot_matrix = quat_to_rotmat(log_quat)
         log_rot_yaw = quat_to_angle(log_quat, focus="yaw")["yaw"]
@@ -516,7 +516,7 @@ class DigitalTwin(BaseRenderer):
         return -self.world_to_nre[:2, 3]
 
 
-class DigitalTwinAssetManager:
+class MTGSAssetManager:
 
     def __init__(self, asset_folder_path: Path, device: torch.device):
         self.asset_folder_path = asset_folder_path
@@ -576,3 +576,8 @@ class DigitalTwinAssetManager:
         # TODO: load foreground assets.
         self.foreground_asset_dir = self.asset_dir / 'foreground'
         self.foreground_assets = list(self.foreground_asset_dir.glob('*.ckpt'))
+
+
+# Backward compatibility aliases
+DigitalTwin = MTGS
+DigitalTwinAssetManager = MTGSAssetManager

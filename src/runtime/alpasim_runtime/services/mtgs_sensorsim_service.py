@@ -2,9 +2,9 @@
 # Copyright (c) 2025 NVIDIA Corporation
 
 """
-DigitalTwin Sensorsim Service implementation.
+MTGS Sensorsim Service implementation.
 
-This service wraps the worldengine DigitalTwin renderer and exposes it via gRPC
+This service wraps the MTGS renderer and exposes it via gRPC
 as a SensorsimService, allowing it to replace the default sensorsim in alpasim.
 """
 
@@ -36,7 +36,7 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
 )
 from alpasim_grpc.v0.sensorsim_pb2_grpc import SensorsimServiceServicer
 from alpasim_utils.artifact import Artifact
-from alpasim_utils.digitaltwin_artifact_adapter import (
+from alpasim_utils.mtgs_artifact_adapter import (
     get_available_cameras_from_data_source,
     rgb_render_request_to_render_state,
 )
@@ -44,30 +44,30 @@ from alpasim_utils.scene_data_source import SceneDataSource
 
 logger = logging.getLogger(__name__)
 
-# Import DigitalTwin renderer from local render module
+# Import MTGS renderer from local render module
 try:
-    from src.render.src.digitaltwin import DigitalTwin
+    from src.render.src.mtgs import MTGS
     from src.render.base_renderer import RenderState
-    DIGITALTWIN_AVAILABLE = True
+    MTGS_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"DigitalTwin renderer not available: {e}")
-    DIGITALTWIN_AVAILABLE = False
-    DigitalTwin = None
+    logger.warning(f"MTGS renderer not available: {e}")
+    MTGS_AVAILABLE = False
+    MTGS = None
     RenderState = None
 
 
 VERSION_MESSAGE = VersionId(
-    version_id="digitaltwin-sensorsim-1.0.0",
+    version_id="mtgs-sensorsim-1.0.0",
     git_hash="unknown",
 )
 
 
-class DigitalTwinSensorsimService(SensorsimServiceServicer):
+class MTGSSensorsimService(SensorsimServiceServicer):
     """
-    gRPC service that wraps worldengine DigitalTwin renderer.
+    gRPC service that wraps MTGS renderer.
     
     This service implements the SensorsimServiceServicer interface, allowing
-    DigitalTwin to be used as a drop-in replacement for the default sensorsim.
+    MTGS to be used as a drop-in replacement for the default sensorsim.
     """
 
     def __init__(
@@ -80,18 +80,18 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ) -> None:
         """
-        Initialize the DigitalTwin sensorsim service.
+        Initialize the MTGS sensorsim service.
         
         Args:
             server: gRPC server instance
             artifacts: Dictionary mapping scene_id to SceneDataSource (from load_data_sources)
-            asset_folder_path: Path to DigitalTwin asset folder
+            asset_folder_path: Path to MTGS asset folder
             scene_id_to_asset_id_mapping: Optional mapping from scene_id to asset_id
             cache_size: Number of renderer instances to cache
             device: Device to use for rendering (cuda or cpu)
         """
-        if not DIGITALTWIN_AVAILABLE:
-            raise ImportError("DigitalTwin renderer is required for DigitalTwinSensorsimService")
+        if not MTGS_AVAILABLE:
+            raise ImportError("MTGS renderer is required for MTGSSensorsimService")
         
         self.server = server
         self.artifacts: Dict[str, SceneDataSource] = artifacts
@@ -105,9 +105,9 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         # Cache renderer instances per scene
         # Note: We can't use lru_cache directly because it needs to access self.artifacts
         # Instead, we'll manually cache renderers
-        self._renderer_cache: Dict[str, DigitalTwin] = {}
+        self._renderer_cache: Dict[str, MTGS] = {}
         
-        def get_renderer(scene_id: str) -> DigitalTwin:
+        def get_renderer(scene_id: str) -> MTGS:
             if scene_id in self._renderer_cache:
                 return self._renderer_cache[scene_id]
             
@@ -121,7 +121,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             asset_id = self.scene_id_to_asset_id_mapping.get(scene_id, scene_id)
             
             # Create renderer with asset_folder_path from service config
-            renderer = DigitalTwin(
+            renderer = MTGS(
                 device=self.device,
                 asset_folder_path=self.asset_folder_path
             )
@@ -252,23 +252,23 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
                 logger.warning("artifact.rig not available, world_to_nre not set")
             
             # Calibrate agent states (will use ego2globals if provided)
-            renderer.digitaltwin_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
+            renderer.mtgs_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
             
             # NOTE: No coordinate offset conversion needed!
             # - Runtime sends ego_pose already in global coordinates
-            # - DigitalTwin.render() will subtract recon2global_translation internally
+            # - MTGS.render() will subtract recon2global_translation internally
             # - get_agent_pose() does nearest-neighbor search in reconstruction coordinate system
             # 
             # Coordinate flow:
             # 1. Runtime: ego_pose in global frame [x_global, y_global, ...]
             # 2. Service: passes through unchanged
-            # 3. DigitalTwin.render(): subtracts recon2global_translation → reconstruction frame
-            # 4. get_agent_pose(): matches in reconstruction frame against digitaltwin_agent2states
-            # 5. digitaltwin_agent2states contains: video_scene_dict.ego2global (global) - recon2global
+            # 3. MTGS.render(): subtracts recon2global_translation → reconstruction frame
+            # 4. get_agent_pose(): matches in reconstruction frame against mtgs_agent2states
+            # 5. mtgs_agent2states contains: video_scene_dict.ego2global (global) - recon2global
             #
             # Therefore: NO offset conversion is needed in the service layer
             renderer.local_to_global_offset = None  # Not used
-            logger.info("Coordinate system: Runtime sends global, DigitalTwin handles conversion internally")
+            logger.info("Coordinate system: Runtime sends global, MTGS handles conversion internally")
             
             renderer._scene_id = scene_id
             renderer._asset_id = asset_id
@@ -339,13 +339,13 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
         self, request: Empty, context: grpc.ServicerContext
     ) -> AvailableEgoMasksReturn:
         """Return available ego masks (empty for now)."""
-        # DigitalTwin doesn't support ego masks yet
+        # MTGS doesn't support ego masks yet
         return AvailableEgoMasksReturn()
 
     def render_rgb(
         self, request: RGBRenderRequest, context: grpc.ServicerContext
     ) -> RGBRenderReturn:
-        """Render an RGB image using DigitalTwin."""
+        """Render an RGB image using MTGS."""
         try:
             scene_id = request.scene_id
             camera_name = request.camera_intrinsics.logical_id
@@ -369,7 +369,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
             )
             
             # NOTE: No coordinate conversion needed - Runtime sends global coordinates
-            # DigitalTwin.render() will handle the conversion internally by subtracting recon2global_translation
+            # MTGS.render() will handle the conversion internally by subtracting recon2global_translation
             
             # Create RenderState object
             # Note: RenderState is a dict subclass, so we can use dict assignment
@@ -464,7 +464,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
                         logger.warning(f"Could not compute ego2globals: {e}")
                     
                     # Calibrate agent states with ego2globals
-                    renderer.digitaltwin_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
+                    renderer.mtgs_agent2states = renderer.calibrate_agent_state(ego2globals=ego2globals)
                     
                     renderer.sensor_caches = None
                 
@@ -669,7 +669,7 @@ class DigitalTwinSensorsimService(SensorsimServiceServicer):
     ):
         """Render LiDAR data (not implemented yet)."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("LiDAR rendering not implemented for DigitalTwin")
+        context.set_details("LiDAR rendering not implemented for MTGS")
         raise NotImplementedError("LiDAR rendering not implemented")
 
     def shut_down(self, request: Empty, context: grpc.ServicerContext) -> Empty:

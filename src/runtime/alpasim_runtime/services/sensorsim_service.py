@@ -279,13 +279,13 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         )
 
         # Create ego_pose (ego vehicle pose without rig_to_camera transform)
-        # This is used by DigitalTwin renderer which needs the actual ego position
+        # This is used by MTGS renderer which needs the actual ego position
         ego_pose = trajectory_to_pose_pair(
             ego_trajectory,
             delta=None,  # No rig_to_camera transform for ego pose
         )
 
-        # Get rig_to_camera as grpc Pose for DigitalTwin renderer
+        # Get rig_to_camera as grpc Pose for MTGS renderer
         rig_to_camera_pose = (
             definition.rig_to_camera.as_grpc_pose()
             if definition.rig_to_camera is not None
@@ -300,8 +300,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             frame_start_us=start_us,
             frame_end_us=end_us,
             sensor_pose=sensor_pose,
-            ego_pose=ego_pose,  # Add ego_pose for DigitalTwin renderer
-            rig_to_camera=rig_to_camera_pose,  # Add rig_to_camera for DigitalTwin
+            ego_pose=ego_pose,  # Add ego_pose for MTGS renderer
+            rig_to_camera=rig_to_camera_pose,  # Add rig_to_camera for MTGS
             dynamic_objects=dynamic_objects,
             image_format=image_format,
             image_quality=95,

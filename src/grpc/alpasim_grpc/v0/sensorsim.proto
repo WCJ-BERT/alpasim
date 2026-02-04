@@ -192,7 +192,7 @@ message RGBRenderRequest {
     // Kept for backward compatibility. If ego_pose is provided, it will be used instead.
     PosePair sensor_pose = 7 [deprecated = true];
 
-    // Ego vehicle pose in world frame (preferred for DigitalTwin renderer)
+    // Ego vehicle pose in world frame (preferred for MTGS renderer)
     // If provided, this will be used instead of deriving from sensor_pose
     PosePair ego_pose = 13;
 
