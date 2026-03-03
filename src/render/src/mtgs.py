@@ -292,10 +292,10 @@ class MTGS(BaseRenderer):
         return camera_to_worlds, intrinsics, map_inverse_distorts, {"height": height, "width": width}
 
     def update_world(self, timestamp, agent_states):
-        
-        if (self.timestamp == timestamp and 
-            hasattr(self, "collected_gaussians") and 
-            self.collected_gaussians and 
+
+        if (self.timestamp == timestamp and
+            hasattr(self, "collected_gaussians") and
+            self.collected_gaussians and
             'means' in self.collected_gaussians):
             return
         gs_dict = {
@@ -304,12 +304,27 @@ class MTGS(BaseRenderer):
             "quats": [],
             "opacities": [],
         }
+
+        # Static objects (background, skybox) that should always be rendered
+        static_asset_tokens = {"background", "skybox"}
+
+        # Track which assets are actually rendered in this frame
+        self.rendered_asset_tokens = []
+
         for asset_token in self.node_types.keys():
             gaussian_model = self.gaussian_models[self.submodel_names[asset_token]]
+
+            # Determine if this asset should be rendered
             if asset_token in agent_states.keys():
+                # Agent is present in current frame - render at specified position
                 quat, trans = self.get_agent_pose(asset_token, agent_states[asset_token])
+            elif asset_token in static_asset_tokens:
+                # Static object (background/skybox) - always render at original position
+                quat, trans = None, None
             else:
-                quat, trans = None, None            # use original log (for background, skybox, etc.)
+                # Agent not in current frame - skip rendering to avoid ghosting
+                logger.debug(f"Skipping agent {asset_token} - not in current agent_states")
+                continue
 
             try:
                 gs = gaussian_model.get_global_gaussians(
@@ -322,15 +337,18 @@ class MTGS(BaseRenderer):
                     continue
                 for k in gs_dict.keys():
                     gs_dict[k].append(gs[k].to(self.device))
+
+                # Record that this asset was successfully rendered
+                self.rendered_asset_tokens.append(asset_token)
             except Exception as e:
                 logger.error(f"Error collecting gaussians for {asset_token}: {e}", exc_info=True)
                 raise
-        
+
         # Check if any gaussians were collected
         if not gs_dict["means"]:
             logger.error(f"No gaussians collected in update_world! node_types: {list(self.node_types.keys())}, agent_states: {list(agent_states.keys())}, timestamp={timestamp}")
             raise RuntimeError(f"No gaussians collected - no models available for timestamp {timestamp}")
-        
+
         try:
             new_collected_gaussians = {}
             for key, value in gs_dict.items():
@@ -343,7 +361,10 @@ class MTGS(BaseRenderer):
 
     def update_gaussian_rgbs(self, camera_to_worlds):
         rgb_list = []
-        for asset_token in self.node_types.keys():
+        # Only process assets that were actually rendered in update_world
+        assets_to_process = getattr(self, 'rendered_asset_tokens', list(self.node_types.keys()))
+
+        for asset_token in assets_to_process:
             gaussian_model = self.gaussian_models[self.submodel_names[asset_token]]
             rgbs = []
             for i in range(camera_to_worlds.shape[0]):

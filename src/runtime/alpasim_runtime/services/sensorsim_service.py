@@ -323,6 +323,21 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         Returns a tuple containing a list of ImageWithMetadata containing the rendered images
         and optional driver data bytes (forwarded without processing to the driver).
         """
+        if self.skip:
+            logger.info("Skip mode: sensorsim returning empty images for aggregated render")
+            # Return empty images for skip mode
+            images_with_metadata = []
+            for camera, trigger in camera_triggers:
+                images_with_metadata.append(
+                    ImageWithMetadata(
+                        start_timestamp_us=trigger.time_range_us.start,
+                        end_timestamp_us=trigger.time_range_us.stop,
+                        image_bytes=b"",  # TODO: fill in with a placeholder image
+                        camera_logical_id=camera.logical_id,
+                    )
+                )
+            return (images_with_metadata, None)
+
         available_ego_masks = await self.get_available_ego_masks()
 
         request = AggregatedRenderRequest()
