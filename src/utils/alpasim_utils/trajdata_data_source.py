@@ -625,7 +625,7 @@ class TrajdataDataSource(SceneDataSource):
 
     @property
     def map(self) -> Optional[VectorMap]:
-        """Load and return VectorMap (obtained from dataset._map_api)"""
+        """Load and return VectorMap (obtained from dataset._map_api or scene.map_data)"""
         if self._map is not None:
             return self._map
 
@@ -637,8 +637,33 @@ class TrajdataDataSource(SceneDataSource):
             logger.warning("Cannot load map: scene is not set")
             return None
 
+        # First, try to get map from scene.map_data (for USDZ and other datasets that attach map directly)
+        if hasattr(self._scene, 'map_data') and self._scene.map_data is not None:
+            logger.info(f"Loading map from scene.map_data for {self.scene_id}")
+            # Make a deep copy to avoid modifying shared map object
+            self._map = copy.deepcopy(self._scene.map_data)
+
+            # Apply coordinate transformation if needed
+            if self._rig is None:
+                # If rig is not loaded yet, load it first (this will set world_to_nre)
+                _ = self.rig
+
+            world_to_nre = self._rig.world_to_nre
+
+            # Check if transformation is needed (if world_to_nre is not identity)
+            if world_to_nre is not None and not np.allclose(world_to_nre, np.eye(4)):
+                translation = world_to_nre[:3, 3]
+                logger.info(f"Transforming map to local coordinates with translation: {translation}")
+
+                # Transform map coordinates
+                self._map.translate(translation[0], translation[1], translation[2])
+
+            logger.info(f"Successfully loaded map from scene.map_data for {self.scene_id}")
+            return self._map
+
+        # Otherwise, try to get map from dataset._map_api (for datasets with map_api)
         if self._dataset is None:
-            logger.warning("Cannot load map: dataset is not set")
+            logger.warning("Cannot load map: dataset is not set and scene.map_data is not available")
             return None
 
         # Get map from dataset._map_api (refer to trajdata_artifact_converter.py)
