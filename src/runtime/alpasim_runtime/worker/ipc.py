@@ -117,6 +117,7 @@ class WorkerArgs:
     allocations: ServiceAllocations  # Pre-computed service allocations for this worker
     user_config_path: str  # Needed for user config (scenarios, endpoints, etc.)
     log_dir: str  # Root directory for outputs (asl/, metrics/, txt-logs/)
+    log_level: str = "INFO"  # Logging level (DEBUG, INFO, WARNING, ERROR)
     eval_config: EvalConfig
     # For orphan detection in subprocess mode. None disables detection (inline mode).
     parent_pid: Optional[int] = None

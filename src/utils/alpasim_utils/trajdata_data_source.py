@@ -418,8 +418,8 @@ class TrajdataDataSource(SceneDataSource):
                 timestamps_us=ego_trajectory.timestamps_us.copy(),
                 poses=local_poses,
             )
-            
-            logger.info(
+
+            logger.debug(
                 f"Transformed ego trajectory to local coordinates. "
                 f"First pose: {ego_trajectory.poses[0].vec3}, "
                 f"Range: X[{local_positions[:, 0].min():.2f}, {local_positions[:, 0].max():.2f}], "

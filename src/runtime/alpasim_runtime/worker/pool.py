@@ -105,8 +105,11 @@ import argparse
 import asyncio
 import logging
 import os
+import sys
 import time
 from multiprocessing import Process, Queue
+
+from tqdm import tqdm
 
 from alpasim_runtime.config import SimulatorConfig
 from alpasim_runtime.telemetry.rpc_wrapper import init_shared_rpc_tracking
@@ -236,6 +239,7 @@ async def _run_inline_worker(
         usdz_glob=getattr(args, 'usdz_glob', None),
         trajdata_config_path=getattr(args, 'trajdata_config', None),
         log_dir=log_dir,
+        log_level=getattr(args, 'log_level', 'INFO'),  # Pass log level to worker
         parent_pid=None,  # Disable orphan detection for inline mode
         eval_config=eval_config,
     )
@@ -243,12 +247,43 @@ async def _run_inline_worker(
     # Send shutdown sentinel - worker will exit after processing all jobs
     job_queue.put(SHUTDOWN_SENTINEL)
 
-    await worker_async_main(worker_args)
+    # Calculate total jobs (excluding the SHUTDOWN_SENTINEL)
+    total_jobs = job_queue.qsize() - 1
 
-    # Collect results from queue
+    # Create progress bar
+    pbar = tqdm(
+        total=total_jobs,
+        desc="Processing rollouts",
+        unit="rollout",
+        file=sys.stderr,
+        disable=total_jobs == 0,
+    )
+
+    # Start worker task
+    worker_task = asyncio.create_task(worker_async_main(worker_args))
+
+    # Collect results and update progress bar in real-time
     results: list[JobResult] = []
-    while not result_queue.empty():
-        results.append(result_queue.get_nowait())
+    loop = asyncio.get_running_loop()
+
+    try:
+        while not worker_task.done() or not result_queue.empty():
+            try:
+                result = result_queue.get_nowait()
+                results.append(result)
+                pbar.update(1)
+
+                # Update postfix with speed
+                if len(results) > 1 and pbar.format_dict.get('elapsed', 0) > 0:
+                    elapsed = pbar.format_dict['elapsed']
+                    rate = len(results) / elapsed
+                    pbar.set_postfix({'speed': f'{rate:.2f}/s'}, refresh=True)
+            except:
+                await asyncio.sleep(0.1)
+
+        await worker_task
+    finally:
+        pbar.close()
 
     return results
 
@@ -313,6 +348,7 @@ async def _run_subprocess_workers(
             trajdata_config_path=getattr(args, 'trajdata_config', None),
             parent_pid=parent_pid,
             log_dir=log_dir,
+            log_level=getattr(args, 'log_level', 'INFO'),  # Pass log level to worker
             shared_rpc_tracking=shared_rpc_tracking,
             eval_config=eval_config,
         )
@@ -326,14 +362,29 @@ async def _run_subprocess_workers(
     # Collect results asynchronously with timeout and liveness checks
     loop = asyncio.get_running_loop()
     results: list[JobResult] = []
+
+    # Create progress bar
+    pbar = tqdm(
+        total=len(jobs),
+        desc="Processing rollouts",
+        unit="rollout",
+        file=sys.stderr,
+        disable=len(jobs) == 0,
+    )
+
     try:
         while len(results) < len(jobs):
             result = await loop.run_in_executor(None, poll_result_queue, result_queue)
 
             if result is not None:
                 results.append(result)
-                if len(results) % 10 == 0 or len(results) == len(jobs):
-                    logger.info("Completed %d/%d jobs", len(results), len(jobs))
+                pbar.update(1)
+
+                # Update postfix with speed
+                if len(results) > 1 and pbar.format_dict.get('elapsed', 0) > 0:
+                    elapsed = pbar.format_dict['elapsed']
+                    rate = len(results) / elapsed
+                    pbar.set_postfix({'speed': f'{rate:.2f}/s'}, refresh=True)
                 continue
 
             # Timeout - check if any workers crashed
@@ -343,6 +394,7 @@ async def _run_subprocess_workers(
                 if not p.is_alive() and p.exitcode != 0
             ]
             if dead_workers:
+                pbar.close()  # Close progress bar before error logging
                 for idx, proc in dead_workers:
                     logger.error("Worker %d died with exit code %s", idx, proc.exitcode)
                 raise RuntimeError(
@@ -353,6 +405,7 @@ async def _run_subprocess_workers(
 
     # Log orphaned jobs on worker failure
     except RuntimeError as e:
+        pbar.close()  # Ensure progress bar is closed on error
         completed_ids = {r.job_id for r in results}
         orphaned_ids = [j.job_id for j in jobs if j.job_id not in completed_ids]
         if orphaned_ids:
@@ -366,6 +419,7 @@ async def _run_subprocess_workers(
 
     # Always attempt graceful shutdown of workers
     finally:
+        pbar.close()  # Ensure progress bar is always closed
         # Send shutdown sentinels (one per worker)
         for _ in workers:
             job_queue.put(SHUTDOWN_SENTINEL)

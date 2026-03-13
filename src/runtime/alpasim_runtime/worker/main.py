@@ -157,10 +157,11 @@ async def worker_async_main(args: WorkerArgs) -> None:
     console_handler.setFormatter(log_formatter)
 
     # Configure only alpasim-related loggers, not the root logger
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
     for logger_name in ["alpasim_runtime", "alpasim_utils", "alpasim_grpc"]:
         pkg_logger = logging.getLogger(logger_name)
         pkg_logger.handlers.clear()
-        pkg_logger.setLevel(logging.INFO)
+        pkg_logger.setLevel(log_level)  # Use log level from args
         pkg_logger.addHandler(file_handler)
         pkg_logger.addHandler(console_handler)
         pkg_logger.propagate = False  # Don't propagate to root logger

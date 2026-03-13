@@ -211,8 +211,8 @@ def main(arg_list: list[str] | None = None) -> None:
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
-        format="%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s",
-        datefmt="%H:%M:%S",
+        format="[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     logger.info("=" * 80)

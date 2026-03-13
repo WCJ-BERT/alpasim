@@ -255,9 +255,9 @@ class MTGSSensorsimService(SensorsimServiceServicer):
                             transform[:3, :3] = rot_mat
                             transform[:3, 3] = trans
                             ego2globals_list.append(transform)
-                        
+
                         ego2globals = np.stack(ego2globals_list)
-                        logger.info(f"Computed ego2globals from rig trajectory: shape {ego2globals.shape}")
+                        logger.debug(f"Computed ego2globals from rig trajectory: shape {ego2globals.shape}")
                 except Exception as e:
                     logger.warning(f"Could not compute ego2globals from rig trajectory: {e}")
             
@@ -266,7 +266,7 @@ class MTGSSensorsimService(SensorsimServiceServicer):
             if hasattr(data_source, 'rig') and data_source.rig is not None:
                 if hasattr(data_source.rig, 'world_to_nre') and data_source.rig.world_to_nre is not None:
                     renderer.set_world_to_nre(data_source.rig.world_to_nre)
-                    logger.info(f"Set world_to_nre from rig: {data_source.rig.world_to_nre[:3, 3]}")
+                    logger.debug(f"Set world_to_nre from rig: translation={data_source.rig.world_to_nre[:3, 3]}")
                 else:
                     logger.warning("data_source.rig exists but world_to_nre is None")
             else:
@@ -609,14 +609,14 @@ class MTGSSensorsimService(SensorsimServiceServicer):
                 continue
             
             # Save rendered image to disk for debugging/visualization
-            self._save_rendered_image(image, scene_id, camera_name, rgb_request.frame_start_us)
+            # self._save_rendered_image(image, scene_id, camera_name, rgb_request.frame_start_us)
             
             rgb_returns.append(RGBRenderReturn(image_bytes=image_bytes.tobytes()))
         
         logger.info(f"Batch rendering completed: {len(rgb_returns)}/{len(request.rgb_requests)} cameras successful")
         
         # Save panorama view combining all cameras
-        self._save_panorama_view(cameras_dict, scene_id, first_request.frame_start_us)
+        # self._save_panorama_view(cameras_dict, scene_id, first_request.frame_start_us)
         
         return AggregatedRenderReturn(rgb_returns=rgb_returns)
 

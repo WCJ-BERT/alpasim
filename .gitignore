@@ -30,9 +30,12 @@ data/vavam-driver/*
 # uv.lock is only used in local development. On the server, we use uv tool run,
 # which does not require uv.lock.
 **/uv.lock
+.worktrees/
 
 # local dir
 my_run/
 outputs/
 logs/
-.worktrees/
+tmp/
+
+
